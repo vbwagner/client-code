@@ -2,13 +2,13 @@
 
 =comment
 
-Copyright (c) 2003-2010, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
-=cut 
+=cut
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 use strict;
 use warnings;
@@ -87,7 +87,8 @@ my $ua = new LWP::UserAgent;
 $ua->agent("Postgres Build Farm Reporter");
 if (my $proxy = $ENV{BF_PROXY})
 {
-    $ua->proxy('http',$proxy);
+    my $targetURI = URI->new($upgrade_target);
+    $ua->proxy($targetURI->scheme,$proxy);
 }
 
 my $request=HTTP::Request->new(POST => "$upgrade_target/$sig");

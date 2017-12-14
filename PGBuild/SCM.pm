@@ -1,15 +1,12 @@
 use strict;
 
-use File::Find;
-use File::Basename;
-
 =comment
 
-Copyright (c) 2003-2010, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
-=cut 
+=cut
 
 ##########################################################################
 #
@@ -19,7 +16,7 @@ See accompanying License file for license details
 
 package PGBuild::SCM;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 # factory function to return the right subclass
 sub new
@@ -58,7 +55,7 @@ sub copy_source
     }
     else
     {
-        system("cp -r $target $build_path 2>&1");
+        system("cp -R -p $target $build_path 2>&1");
     }
     my $status = $? >> 8;
     die "copying directories: $status" if $status;
@@ -85,6 +82,11 @@ sub copy_source
 ##################################
 
 package PGBuild::SCM::CVS;
+
+use File::Find;
+use File::Basename;
+use PGBuild::Options;
+use PGBuild::Utils;
 
 sub new
 {
@@ -242,7 +244,7 @@ sub checkout
     }
     my $status = $? >>8;
     print "======== cvs $cvsmethod log ===========\n",@cvslog
-      if ($main::verbose > 1);
+      if ($verbose > 1);
 
     # can't call writelog here because we call cleanlogs after the
     # scm stage, since we only clear out the logs if we find we need to
@@ -262,24 +264,23 @@ sub checkout
 
     if (   $cvsmethod ne 'export'
         && $unknown_files
-        &&!($main::nosend && $main::nostatus ) )
+        &&!($nosend && $nostatus ) )
     {
         sleep 20;
         my @statout = `cd $target && cvs -d $cvsserver status 2>&1`;
         $unknown_files = grep { /^\?/ } @statout;
     }
 
-    main::send_result("$target-CVS",$status,\@cvslog)	if ($status);
-    main::send_result("$target-CVS-Merge",$merge_conflicts,\@cvslog)
+    send_result("$target-CVS",$status,\@cvslog)	if ($status);
+    send_result("$target-CVS-Merge",$merge_conflicts,\@cvslog)
       if ($merge_conflicts);
-    unless ($main::nosend && $main::nostatus)
+    unless ($nosend && $nostatus)
     {
-        main::send_result("$target-CVS-Dirty",$mod_files,\@cvslog)
+        send_result("$target-CVS-Dirty",$mod_files,\@cvslog)
           if ($mod_files);
-        main::send_result("$target-CVS-Extraneous-Files",
-            $unknown_files,\@cvslog)
+        send_result("$target-CVS-Extraneous-Files",$unknown_files,\@cvslog)
           if ($unknown_files);
-        main::send_result("$target-CVS-Extraneous-Ignore",
+        send_result("$target-CVS-Extraneous-Ignore",
             scalar(@bad_ignore),\@bad_ignore)
           if (@bad_ignore);
     }
@@ -400,8 +401,8 @@ sub get_versions
         push(@cvs_status,@res);
         my $status = $? >>8;
         print "======== $target-cvs status log ===========\n",@cvs_status
-          if ($main::verbose > 1);
-        main::send_result("$target-CVS-status",$status,\@cvs_status)
+          if ($verbose > 1);
+        send_result("$target-CVS-status",$status,\@cvs_status)
           if ($status);
     }
     my @fchunks = split(/File:/,join("",@cvs_status));
@@ -445,6 +446,12 @@ use File::Copy;
 use File::Path;
 use Fcntl qw(:flock);
 
+use File::Find;
+use File::Basename;
+
+use PGBuild::Utils;
+use PGBuild::Options;
+
 sub new
 {
     my $class = shift;
@@ -452,7 +459,7 @@ sub new
     my $target = shift;
     my $self = {};
     $self->{gitrepo} =$conf->{scmrepo}
-      || "git://git.postgresql.org/git/postgresql.git";
+      || "https://git.postgresql.org/git/postgresql.git";
     $self->{reference} = $conf->{git_reference}
       if defined($conf->{git_reference});
 
@@ -465,6 +472,11 @@ sub new
     $self->{ignore_mirror_failure} = $conf->{git_ignore_mirror_failure};
     $self->{use_workdirs} = $conf->{git_use_workdirs};
     $self->{build_root} = $conf->{build_root};
+    $self->{gchours} = 7 * 24; # default 1 week.
+    if (exists($conf->{git_gc_hours}))
+    {
+        $self->{gchours} = $conf->{git_gc_hours};
+    }
     $self->{target} = $target;
     return bless $self, $class;
 }
@@ -505,7 +517,6 @@ sub get_build_path
 
 sub check_access
 {
-
     # no login required?
     return;
 }
@@ -513,7 +524,7 @@ sub check_access
 sub log_id
 {
     my $self = shift;
-    main::writelog('githead',[$self->{headref}])
+    writelog('githead',[$self->{headref}])
       if $self->{headref};
 }
 
@@ -558,12 +569,22 @@ sub checkout
     if ($self->{mirror})
     {
 
-        my $mirror = $target eq 'pgsql' ? 'pgmirror.git' : "$target-mirror.git";
-
         if (-d $self->{mirror})
         {
-            @gitlog = `git --git-dir="$self->{mirror}" fetch 2>&1`;
+            @gitlog = run_log(qq{git --git-dir="$self->{mirror}" fetch});
             $status = $self->{ignore_mirror_failure} ? 0 : $? >> 8;
+
+            my $last_gc = find_last("$target.mirror.gc") || 0;
+            if (  !$status
+                && $branch eq 'HEAD'
+                && $self->{gchours}
+                && time - $last_gc > $self->{gchours} * 3600)
+            {
+                my @gclog = run_log(qq{git --git-dir="$self->{mirror}" gc});
+                push(@gitlog,"----- mirror garbage collection -----\n",@gclog);
+                set_last("$target.mirror.gc");
+                $status = $? >> 8;
+            }
         }
         else
         {
@@ -576,21 +597,21 @@ sub checkout
             #   git clone --bare $gitserver pgmirror.git
             #   (cd pgmirror.git && git remote add --mirror origin $gitserver)
             # or equivalent for other targets
-            @gitlog = `git clone --mirror $gitserver $self->{mirror} 2>&1`;
+            @gitlog = run_log("git clone --mirror $gitserver $self->{mirror}");
             $status = $? >>8;
         }
         if ($status)
         {
             unshift(@gitlog,"Git mirror failure:\n");
-            print @gitlog if ($main::verbose);
-            main::send_result('Git-mirror',$status,\@gitlog);
+            print @gitlog if ($verbose);
+            send_result('Git-mirror',$status,\@gitlog);
         }
     }
 
     if (-d $target)
     {
         chdir $target;
-        my @branches = `git branch 2>&1`;
+        my @branches = `git branch`; # too trivial for run_log
         unless (grep {/^\* bf_$branch$/} @branches)
         {
             if (-l ".git/config" && -f ".git/config")
@@ -601,7 +622,7 @@ sub checkout
                 # this shouldn't happen on HEAD/master, so we don't need
                 # special branch name logic
                 my @ncolog =
-                  `git checkout -b bf_$branch --track origin/$branch 2>&1`;
+                  run_log("git checkout -b bf_$branch --track origin/$branch");
                 push(@gitlog,@ncolog);
             }
             else
@@ -611,18 +632,30 @@ sub checkout
 
                 chdir '..';
                 print "Missing checked out branch bf_$branch:\n",@branches
-                  if ($main::verbose);
+                  if ($verbose);
                 unshift @branches,"Missing checked out branch bf_$branch:\n";
-                main::send_result("$target-Git",$status,\@branches);
+                send_result("$target-Git",$status,\@branches);
             }
         }
 
         # do a checkout in case the work tree has been removed
         # this is harmless if it hasn't
-        my @colog = `git checkout . 2>&1`;
-        my @pulllog = `git pull 2>&1`;
+        my @colog = run_log("git checkout . ");
+        my @pulllog = run_log("git pull");
         push(@gitlog,@colog,@pulllog);
         chdir '..';
+
+        # run gc from the parent so we find and set the status file correctly
+        if ( !-l "$target/.git/config" && $self->{gchours})
+        {
+            my $last_gc = find_last("$target.gc") || 0;
+            if (time - $last_gc > $self->{gchours} * 3600)
+            {
+                my @gclog = run_log("git --git-dir=$target/.git gc");
+                push(@gitlog,"----- garbage collection -----\n",@gclog);
+                set_last("$target.gc");
+            }
+        }
     }
     elsif ($branch ne 'HEAD'
         && $self->{use_workdirs}
@@ -654,7 +687,7 @@ sub checkout
 
             mkdir $head;
 
-            my @clonelog = `git clone -q $base "$head/$target" 2>&1`;
+            my @clonelog = run_log(qq{git clone -q $base "$head/$target"});
             push(@gitlog,@clonelog);
             $status = $? >>8;
             if (!$status)
@@ -663,7 +696,8 @@ sub checkout
                 chdir "$head/$target";
 
                 # make sure we don't name the new branch HEAD
-                my @colog =`git checkout -b bf_HEAD --track origin/master 2>&1`;
+                my @colog =
+                  run_log("git checkout -b bf_HEAD --track origin/master");
                 push(@gitlog,@colog);
                 chdir $savedir;
             }
@@ -691,15 +725,16 @@ sub checkout
             # Don't try to create an existing branch
             # the target dir only might have been wiped away,
             # so we need to handle this case.
-            @colog =`git checkout -f bf_$branch 2>&1`;
+            @colog = run_log("git checkout -f bf_$branch");
         }
         else
         {
-            @colog =`git checkout -f -b bf_$branch --track origin/$branch 2>&1`;
+            @colog =
+              run_log("git checkout -f -b bf_$branch --track origin/$branch");
         }
 
         # Make sure the branch we just checked out is up to date.
-        my @pull_log = `git pull 2>&1`;
+        my @pull_log = run_log("git pull");
         push(@gitlog,@colog,@pull_log);
 
         chdir "..";
@@ -715,7 +750,7 @@ sub checkout
         $base = "$drive$base"
           if ( $char1 eq '/' or $char1 eq '\\');
 
-        my @clonelog = `git clone -q $reference $base $target 2>&1`;
+        my @clonelog = run_log("git clone -q $reference $base $target");
         push(@gitlog,@clonelog);
         $status = $? >>8;
         if (!$status)
@@ -726,14 +761,14 @@ sub checkout
             # also, safer to checkout origin/master than origin/HEAD, I think
             my $rbranch = $branch eq 'HEAD' ? 'master' : $branch;
             my @colog =
-              `git checkout -b bf_$branch --track origin/$rbranch 2>&1`;
+              run_log("git checkout -b bf_$branch --track origin/$rbranch");
             push(@gitlog,@colog);
             chdir "..";
         }
     }
     $status = $? >>8;
     print "================== git log =====================\n",@gitlog
-      if ($main::verbose > 1);
+      if ($verbose > 1);
 
     close($lockfile) if $lockfile;
 
@@ -748,16 +783,16 @@ sub checkout
     # loudly.
 
     chdir "$target";
-    my @gitstat = `git status --porcelain 2>&1`;
-    my $headref = `git show-ref --heads -- bf_$branch 2>&1`;
+    my @gitstat = `git status --porcelain`; # too trivial for run_log
+    my $headref = `git show-ref --heads -- bf_$branch 2>&1`; # ditto
     $self->{headref} = (split(/\s+/, $headref))[0];
     chdir "..";
 
-    main::send_result("$target-Git",$status,\@gitlog)	if ($status);
-    unless ($main::nosend && $main::nostatus)
+    send_result("$target-Git",$status,\@gitlog)	if ($status);
+    unless ($nosend && $nostatus)
     {
         push(@gitlog,"===========",@gitstat);
-        main::send_result("$target-Git-Dirty",99,\@gitlog)
+        send_result("$target-Git-Dirty",99,\@gitlog)
           if (@gitstat);
     }
 
@@ -799,6 +834,8 @@ sub rm_worktree
 sub parse_log
 {
     my $cmd = shift;
+
+    # don't use run_log here in case it has dates
     my @lines = `$cmd`;
     chomp(@lines);
     my $commit;
@@ -832,6 +869,7 @@ sub find_changed
     my $changed_files = shift;
     my $changed_since_success = shift;
 
+    # too trivial to use run_log
     my $cmd = qq{git --git-dir=$target/.git log -n 1 "--pretty=format:%ct"};
     $$current_snap = `$cmd` +0;
 

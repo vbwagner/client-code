@@ -2,14 +2,22 @@
 # Package Namespace is hardcoded. Modules must live in
 # PGBuild::Modules
 
+=comment
+
+Copyright (c) 2003-2017, Andrew Dunstan
+
+See accompanying License file for license details
+
+=cut
+
 package PGBuild::Modules::Skeleton;
 
 use PGBuild::Options;
 use PGBuild::SCM;
-
+use PGBuild::Utils;
 use strict;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 my $hooks = {
     'checkout' => \&checkout,
@@ -43,7 +51,7 @@ sub setup
     bless($self, $class);
 
     # for each instance you create, do:
-    main::register_module_hooks($self,$hooks);
+    register_module_hooks($self,$hooks);
 
 }
 
@@ -52,7 +60,7 @@ sub checkout
     my $self = shift;
     my $savescmlog = shift; # array ref to the log lines
 
-    print main::time_str(), "checking out ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "checking out ",__PACKAGE__,"\n" if	$verbose;
 
     push(@$savescmlog,"Skeleton processed checkout\n");
 }
@@ -63,7 +71,7 @@ sub setup_target
 
     # copy the code or setup a vpath dir if supported as appropriate
 
-    print main::time_str(), "setting up ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "setting up ",__PACKAGE__,"\n" if	$verbose;
 
 }
 
@@ -75,7 +83,7 @@ sub need_run
     # to force a run do:
     # $$run_needed = 1;
 
-    print main::time_str(), "checking if run needed by ",__PACKAGE__,"\n"
+    print time_str(), "checking if run needed by ",__PACKAGE__,"\n"
       if	$verbose;
 
 }
@@ -84,28 +92,28 @@ sub configure
 {
     my $self = shift;
 
-    print main::time_str(), "configuring ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "configuring ",__PACKAGE__,"\n" if	$verbose;
 }
 
 sub build
 {
     my $self = shift;
 
-    print main::time_str(), "building ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "building ",__PACKAGE__,"\n" if	$verbose;
 }
 
 sub install
 {
     my $self = shift;
 
-    print main::time_str(), "installing ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "installing ",__PACKAGE__,"\n" if	$verbose;
 }
 
 sub check
 {
     my $self = shift;
 
-    print main::time_str(), "checking ",__PACKAGE__,"\n" if	$verbose;
+    print time_str(), "checking ",__PACKAGE__,"\n" if	$verbose;
 }
 
 sub installcheck
@@ -113,7 +121,7 @@ sub installcheck
     my $self = shift;
     my $locale = shift;
 
-    print main::time_str(), "installchecking $locale",__PACKAGE__,"\n"
+    print time_str(), "installchecking $locale",__PACKAGE__,"\n"
       if	$verbose;
 }
 
@@ -122,7 +130,7 @@ sub locale_end
     my $self = shift;
     my $locale = shift;
 
-    print main::time_str(), "end of locale $locale processing",__PACKAGE__,"\n"
+    print time_str(), "end of locale $locale processing",__PACKAGE__,"\n"
       if	$verbose;
 }
 
@@ -130,7 +138,7 @@ sub cleanup
 {
     my $self = shift;
 
-    print main::time_str(), "cleaning up ",__PACKAGE__,"\n" if	$verbose > 1;
+    print time_str(), "cleaning up ",__PACKAGE__,"\n" if	$verbose > 1;
 }
 
 1;

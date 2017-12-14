@@ -2,11 +2,11 @@
 
 =comment
 
-Copyright (c) 2003-2010, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
-=cut 
+=cut
 
 ####################################################
 
@@ -22,7 +22,7 @@ See accompanying License file for license details
 
  DOCUMENTATION:
 
-  See http://wiki.postgresql.org/wiki/PostgreSQL_Buildfarm_Howto
+  See https://wiki.postgresql.org/wiki/PostgreSQL_Buildfarm_Howto
 
  REPOSITORY:
 
@@ -32,7 +32,7 @@ See accompanying License file for license details
 
 ###################################################
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 use strict;
 use warnings;
@@ -49,6 +49,15 @@ use Data::Dumper;
 use Cwd qw(abs_path getcwd);
 use File::Find ();
 
+BEGIN { use lib File::Spec->rel2abs(dirname(__FILE__)); }
+
+# use High Resolution stat times if the module is available
+# this helps make sure we sort logfiles correctly
+BEGIN
+{
+    eval { require Time::HiRes; Time::HiRes->import('stat'); };
+}
+
 # save a copy of the original enviroment for reporting
 # save it early to reduce the risk of prior mangling
 use vars qw($orig_env);
@@ -63,7 +72,7 @@ BEGIN
         # this is to stop leaking of things like passwords
         $orig_env->{$k} =(
             (
-                    $k =~ /^PG(?!PASSWORD)|MAKE|CC|CPP|FLAG|LIBRAR|INCLUDE/
+                    $k =~ /^PG(?!PASSWORD)|MAKE|CC|CPP|CXX|LD|LD_LIBRARY_PATH|LIBRAR|INCLUDE/
                   ||$k =~/^(HOME|LOGNAME|USER|PATH|SHELL)$/
             )
             ? $v
@@ -75,8 +84,12 @@ BEGIN
 use PGBuild::SCM;
 use PGBuild::Options;
 use PGBuild::WebTxn;
+use PGBuild::Utils qw(:DEFAULT $st_prefix $logdirname $branch_root
+  $steps_completed %skip_steps %only_steps $tmpdir
+  $temp_installs $devnull $send_result_routine);
 
-my %module_hooks;
+$send_result_routine = \&send_res;
+
 my $orig_dir = getcwd();
 push @INC, $orig_dir;
 
@@ -105,9 +118,6 @@ die "only one of --from-source and --from-source-clean allowed"
 die "only one of --skip-steps and --only-steps allowed"
   if ($skip_steps && $only_steps);
 
-$verbose=1 if (defined($verbose) && $verbose==0);
-$verbose ||= 0; # stop complaints about undefined var in numeric comparison
-
 if ($testmode)
 {
     $verbose=1 unless $verbose;
@@ -117,7 +127,6 @@ if ($testmode)
 
 }
 
-use vars qw(%skip_steps %only_steps);
 $skip_steps ||= "";
 if ($skip_steps =~ /\S/)
 {
@@ -140,28 +149,40 @@ print_help() if ($help);
 #
 require $buildconf;
 
+# get this here before we change directories
+my $buildconf_mod = (stat $buildconf)[9];
+
+PGBuild::Options::fixup_conf(\%PGBuild::conf, \@config_set);
+
+# default buildroot
+$PGBuild::conf{build_root} ||= abs_path(dirname(__FILE__)) . "/buildroot";
+
 # get the config data into some local variables
 my (
-    $buildroot,$target,$animal,
-    $aux_path,$trigger_exclude,$trigger_include,
-    $secret,$keep_errs,$force_every,
-    $make, $optional_steps,$use_vpath,
+    $buildroot, $target, $animal,
+    $aux_path, $trigger_exclude, $trigger_include,
+    $secret, $keep_errs, $force_every,
+    $make, $optional_steps, $use_vpath,
     $tar_log_cmd, $using_msvc, $extra_config,
-    $make_jobs,$core_file_glob, $ccache_failure_remove,
-    $wait_timeout
+    $make_jobs, $core_file_glob, $ccache_failure_remove,
+    $wait_timeout, $use_accache
   )
   =@PGBuild::conf{
     qw(build_root target animal aux_path trigger_exclude
       trigger_include secret keep_error_builds force_every make optional_steps
       use_vpath tar_log_cmd using_msvc extra_config make_jobs core_file_glob
-      ccache_failure_remove wait_timeout)
+      ccache_failure_remove wait_timeout use_accache)
   };
+
+# default use_accache to on
+$use_accache = 1 unless exists $PGBuild::conf{use_accache};
 
 #default is no parallel build
 $make_jobs ||= 1;
 
 # default core file pattern is Linux, which used to be hardcoded
 $core_file_glob ||= 'core*';
+$PGBuild::Utils::core_file_glob = $core_file_glob;
 
 # legacy name
 if (defined($PGBuild::conf{trigger_filter}))
@@ -184,7 +205,6 @@ if (ref($force_every) eq 'HASH')
 }
 
 my $config_opts = $PGBuild::conf{config_opts};
-my $scm = new PGBuild::SCM \%PGBuild::conf;
 
 use vars qw($buildport);
 
@@ -208,22 +228,24 @@ $ENV{EXTRA_REGRESS_OPTS} = "--port=$buildport";
 
 $tar_log_cmd ||= "tar -z -cf runlogs.tgz *.log";
 
-my $logdirname = "lastrun-logs";
+$logdirname = "lastrun-logs";
 
 if ($from_source || $from_source_clean)
 {
     $from_source ||= $from_source_clean;
-    die "sourceroot $from_source not absolute"
-      unless $from_source =~ m!^/!;
+    $from_source = abs_path($from_source)
+      unless File::Spec->file_name_is_absolute($from_source);
 
     # we need to know where the lock should go, so unless the path
-    # contains HEAD we require it to be specified.
-    die "must specify branch explicitly with from_source"
+    # contains HEAD or they have explicitly said the branch let
+    # them know where things are going.
+    print
+      "branch not specified, locks, logs, ",
+      "build artefacts etc will go in HEAD\n"
       unless ($explicit_branch || $from_source =~ m!/HEAD/!);
     $verbose ||= 1;
     $nosend=1;
     $nostatus=1;
-    $use_vpath = undef;
     $logdirname = "fromsource-logs";
 }
 
@@ -254,23 +276,16 @@ if ($ccachedir)
     $ccachedir = abs_path($ccachedir);
 }
 
-if ($^V lt v5.8.0)
+if ($^V lt v5.8.0 || ($Config{osname} eq 'msys' && $target =~ /^https/))
 {
     die "no aux_path in config file" unless $aux_path;
 }
 
 die "cannot run as root/Administrator" unless ($using_msvc or $> > 0);
 
-my $devnull = $using_msvc ? "nul" : "/dev/null";
+$devnull = $using_msvc ? "nul" : "/dev/null";
 
-if (!$from_source)
-{
-    $scm->check_access($using_msvc);
-}
-
-my $st_prefix = "$animal.";
-
-my $pgsql = $from_source  || $scm->get_build_path($use_vpath);
+$st_prefix = "$animal.";
 
 # set environment from config
 while (my ($envkey,$envval) = each %{$PGBuild::conf{build_env}})
@@ -292,9 +307,27 @@ unless ($buildroot =~ m!^/!
     die "buildroot $buildroot not absolute";
 }
 
+mkpath $buildroot unless -d $buildroot;
+
 die "$buildroot does not exist or is not a directory" unless -d $buildroot;
 
 chdir $buildroot || die "chdir to $buildroot: $!";
+
+# set up a temporary directory for extra configs, sockets etc
+my $oldmask = umask;
+umask 0077 unless $using_msvc;
+$tmpdir = File::Temp::tempdir(
+    "buildfarm-XXXXXX",
+    DIR => File::Spec->tmpdir,
+    CLEANUP => 1
+);
+umask $oldmask unless $using_msvc;
+
+my $scm = new PGBuild::SCM \%PGBuild::conf;
+if (!$from_source)
+{
+    $scm->check_access($using_msvc);
+}
 
 mkdir $branch unless -d $branch;
 
@@ -306,7 +339,17 @@ foreach my $oldfile (glob("last*"))
     move $oldfile, "$st_prefix$oldfile";
 }
 
-my $branch_root = getcwd();
+$branch_root = getcwd();
+
+my $pgsql;
+if ($from_source)
+{
+    $pgsql = $use_vpath ?  "$branch_root/pgsql.build" : $from_source;
+}
+else
+{
+    $pgsql = $scm->get_build_path($use_vpath);
+}
 
 # make sure we are using GNU make (except for MSVC)
 unless ($using_msvc)
@@ -322,7 +365,7 @@ foreach my $module (@{$PGBuild::conf{modules}})
     # fill in the name of the module here, so use double quotes
     # so everything BUT the module name needs to be escaped
     my $str = qq!
-         require PGBuild::Modules::$module; 
+         require PGBuild::Modules::$module;
          PGBuild::Modules::${module}::setup(
               \$buildroot,
               \$branch,
@@ -359,7 +402,7 @@ elsif ( !flock($lockfile,LOCK_EX|LOCK_NB) )
 }
 
 rmtree("inst");
-rmtree("$pgsql") unless ($from_source);
+rmtree("$pgsql") unless ($from_source && !$use_vpath);
 
 # we are OK to run if we get here
 $have_lock = 1;
@@ -406,9 +449,6 @@ END
     return if (defined($waiter_pid) && $waiter_pid == $$);
 
     kill('TERM', $waiter_pid) if $waiter_pid;
-
-    # clean up temp file
-    unlink $ENV{TEMP_CONFIG} if $extraconf;
 
     # if we have the lock we must already be in the build root, so
     # removing things there should be safe.
@@ -471,9 +511,8 @@ END
 
     if ($have_lock)
     {
-        if ($use_vpath)
+        if ($use_vpath && !$from_source)
         {
-
             # vpath builds leave some stuff lying around in the
             # source dir, unfortunately. This should clean it up.
             $scm->cleanup();
@@ -508,13 +547,8 @@ if ($extra_config &&  $extra_config->{DEFAULT})
 
 if ($extra_config && $extra_config->{$branch})
 {
-    my $tmpname;
-    ($extraconf,$tmpname) =File::Temp::tempfile(
-        'buildfarm-XXXXXX',
-        DIR => File::Spec->tmpdir(),
-        UNLINK => 1
-    );
-    die 'no $tmpname!' unless $tmpname;
+    my $tmpname = "$tmpdir/bfextra.conf";
+    open($extraconf, ">$tmpname") || die 'opening $tmpname $!';
     $ENV{TEMP_CONFIG} = $tmpname;
     foreach my $line (@{$extra_config->{$branch}})
     {
@@ -523,7 +557,6 @@ if ($extra_config && $extra_config->{$branch})
     autoflush $extraconf 1;
 }
 
-use vars qw($steps_completed);
 $steps_completed = "";
 
 my @changed_files;
@@ -536,8 +569,6 @@ my @filtered_files;
 my $savescmlog = "";
 
 $ENV{PGUSER} = 'buildfarm';
-
-check_port_is_ok($buildport, 'Pre');
 
 if ($from_source_clean)
 {
@@ -667,6 +698,10 @@ set_last('run.snap',$current_snap) unless $nostatus;
 
 my $started_times = 0;
 
+# counter for temp installs. if it gets high enough
+# (currently 3) we can set NO_TEMP_INSTALL.
+$temp_installs = 0;
+
 # each of these routines will call send_result, which calls exit,
 # on any error, so each step depends on success in the previous
 # steps.
@@ -701,12 +736,11 @@ make_check();
 # Elements of check world
 
 
-# contrib is builtunder standard build step for msvc
+# contrib is built under the standard build step for msvc
 make_contrib() unless ($using_msvc);
 
 make_contrib_check() unless ($using_msvc);
 
-make_bin_check();
 
 if (
 	step_wanted('pl-check')
@@ -751,7 +785,9 @@ process_module_hooks("check");
 
 process_module_hooks('install');
 
-make_bin_installcheck();
+run_bin_tests();
+
+run_misc_tests();
 
 foreach my $locale (@locales)
 {
@@ -760,6 +796,16 @@ foreach my $locale (@locales)
     print time_str(),"setting up db cluster ($locale)...\n" if $verbose;
 
     initdb($locale);
+
+    my %saveenv = %ENV;
+    if (!$using_msvc && $Config{osname} !~ /msys|MSWin/)
+    {
+        $ENV{PGHOST} = $tmpdir;
+    }
+    else
+    {
+        $ENV{PGHOST} = 'localhost';
+    }
 
     print time_str(),"starting db ($locale)...\n" if $verbose;
 
@@ -846,6 +892,8 @@ foreach my $locale (@locales)
 
     stop_db($locale);
 
+    %ENV = %saveenv;
+
     process_module_hooks('locale-end',$locale);
 
     rmtree("$installdir/data-$locale")
@@ -867,8 +915,6 @@ if (check_optional_step('find_typedefs') || $find_typedefs)
 
     find_typedefs();
 }
-
-check_port_is_ok($buildport,'Post');
 
 # if we get here everything went fine ...
 
@@ -902,7 +948,7 @@ usage: $0 [options] [branch]
   --config=/path/to/file    = alternative location for config file
   --keepall                 = keep directories if an error occurs
   --verbose[=n]             = verbosity (default 1) 2 or more = huge output.
-  --quiet                   = suppress normal error message 
+  --quiet                   = suppress normal error message
   --test                    = short for --nosend --nostatus --verbose --force
   --skip-steps=list         = skip certain steps
   --only-steps=list         = only do certain steps, not allowed with skip-steps
@@ -911,43 +957,6 @@ Default branch is HEAD. Usually only the --config option should be necessary.
 
 !;
     exit(0);
-}
-
-sub time_str
-{
-    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) = localtime(time);
-    return sprintf("[%.2d:%.2d:%.2d] ",$hour, $min, $sec);
-}
-
-sub step_wanted
-{
-    my $step = shift;
-    return $only_steps{$step} if (keys %only_steps);
-    return !$skip_steps{$step} if (keys %skip_steps);
-    return 1; # default is everything is wanted
-}
-
-sub register_module_hooks
-{
-    my $who = shift;
-    my $what = shift;
-    while (my ($hook,$func) = each %$what)
-    {
-        $module_hooks{$hook} ||= [];
-        push(@{$module_hooks{$hook}},[$func,$who]);
-    }
-}
-
-sub process_module_hooks
-{
-    my $hook = shift;
-
-    # pass remaining args (if any) to module func
-    foreach my $module (@{$module_hooks{$hook}})
-    {
-        my ($func,$module_instance) = @$module;
-        &$func($module_instance, @_);
-    }
 }
 
 sub check_optional_step
@@ -985,7 +994,7 @@ sub clean_from_source
     {
 
         # fixme for MSVC
-        my @makeout = `cd $pgsql && $make distclean 2>&1`;
+        my @makeout = run_log("cd $pgsql && $make distclean");
         my $status = $? >>8;
         writelog('distclean',\@makeout);
         print "======== distclean log ===========\n",@makeout if ($verbose > 1);
@@ -1000,28 +1009,9 @@ sub interrupt_exit
     exit(1);
 }
 
-sub cleanlogs
-{
-    my $lrname = $st_prefix . $logdirname;
-    rmtree("$lrname");
-    mkdir "$lrname" || die "can't make $lrname dir: $!";
-}
-
-sub writelog
-{
-    my $stage = shift;
-    my $fname = "$stage.log";
-    my $loglines = shift;
-    my $handle;
-    my $lrname = $st_prefix . $logdirname;
-    open($handle,">$lrname/$fname") || die $!;
-    print $handle @$loglines;
-    close($handle);
-}
-
 sub check_make
 {
-    my @out = `$make -v 2>&1`;
+    my @out = run_log("$make -v");
     return undef unless ($? == 0 && grep {/GNU Make/} @out);
     return 'OK';
 }
@@ -1053,13 +1043,13 @@ sub make
     {
         my $make_cmd = $make;
         $make_cmd = "$make -j $make_jobs"
-          if ($make_jobs > 1 && ($build_version ge "9.1"));
-        @makeout = `cd $pgsql && $make_cmd 2>&1`;
+          if ($make_jobs > 1 && ($build_version ge "9.1.0"));
+        @makeout = run_log("cd $pgsql && $make_cmd");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl build.pl 2>&1`;
+        @makeout = run_log("perl build.pl");
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1077,12 +1067,12 @@ sub make_doc
     my (@makeout);
     unless ($using_msvc)
     {
-        @makeout = `cd $pgsql/doc && $make 2>&1`;
+        @makeout = run_log("cd $pgsql/doc && $make");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl builddoc.pl 2>&1`;
+        @makeout = run_log("perl builddoc.pl");
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1100,12 +1090,12 @@ sub make_install
     my @makeout;
     unless ($using_msvc)
     {
-        @makeout = `cd $pgsql && $make install 2>&1`;
+        @makeout = run_log("cd $pgsql && $make install");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl install.pl "$installdir" 2>&1`;
+        @makeout = run_log(qq{perl install.pl "$installdir"});
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1163,8 +1153,8 @@ sub make_contrib
 
     my $make_cmd = $make;
     $make_cmd = "$make -j $make_jobs"
-      if ($make_jobs > 1 && ($build_version ge "9.1"));
-    my @makeout = `cd $pgsql/contrib && $make_cmd 2>&1`;
+      if ($make_jobs > 1 && ($build_version ge "9.1,0"));
+    my @makeout = run_log("cd $pgsql/contrib && $make_cmd");
     my $status = $? >>8;
     writelog('make-contrib',\@makeout);
     print "======== make contrib log ===========\n",@makeout if ($verbose > 1);
@@ -1180,7 +1170,7 @@ sub make_testmodules
     my $make_cmd = $make;
     $make_cmd = "$make -j $make_jobs"
       if ($make_jobs > 1);
-    my @makeout = `cd $pgsql/src/test/modules && $make_cmd 2>&1`;
+    my @makeout = run_log("cd $pgsql/src/test/modules && $make_cmd");
     my $status = $? >> 8;
     writelog('make-testmodules',\@makeout);
     print "======== make testmodules log ===========\n",@makeout
@@ -1199,12 +1189,16 @@ sub make_contrib_install
       if $verbose;
 
     # part of install under msvc
-    my @makeout = `cd $pgsql/contrib && $make install 2>&1`;
+    my $tmp_inst = abs_path($pgsql) . "/tmp_install";
+    my $cmd =
+      "cd $pgsql/contrib && $make install && $make DESTDIR=$tmp_inst install";
+    my @makeout = run_log($cmd);
     my $status = $? >>8;
     writelog('install-contrib',\@makeout);
     print "======== make contrib install log ===========\n",@makeout
       if ($verbose > 1);
     send_result('ContribInstall',$status,\@makeout) if $status;
+    $temp_installs++;
     $steps_completed .= " ContribInstall";
 }
 
@@ -1216,12 +1210,16 @@ sub make_testmodules_install
     print time_str(),"running make testmodules install ...\n"
       if $verbose;
 
-    my @makeout = `cd $pgsql/src/test/modules && $make install 2>&1`;
+    my $tmp_inst = abs_path($pgsql) . "/tmp_install";
+    my $cmd = "cd $pgsql/src/test/modules  && "
+      ."$make install && $make DESTDIR=$tmp_inst install";
+    my @makeout = run_log($cmd);
     my $status = $? >>8;
     writelog('install-testmodules',\@makeout);
     print "======== make testmodules install log ===========\n",@makeout
       if ($verbose > 1);
     send_result('TestModulesInstall',$status,\@makeout) if $status;
+    $temp_installs++;
     $steps_completed .= " TestModulesInstall";
 }
 
@@ -1230,32 +1228,71 @@ sub initdb
     my $locale = shift;
     $started_times = 0;
     my @initout;
-    if ($using_msvc)
-    {
-        chdir $installdir;
-        @initout =
-          `"bin/initdb" -U buildfarm -E UTF8 --locale=$locale data-$locale 2>&1`;
-        chdir $branch_root;
-    }
-    else
-    {
-        chdir $installdir;
-        @initout =`bin/initdb -U buildfarm -E UTF8 --locale=$locale data-$locale 2>&1`;
-        chdir $branch_root;
-    }
+
+    my $abspgsql = File::Spec->rel2abs($pgsql);
+
+    chdir $installdir;
+
+    @initout =
+      run_log(qq{"bin/initdb" -U buildfarm -E UTF8 --locale=$locale data-$locale});
 
     my $status = $? >>8;
 
-    if ($extraconf && !$status)
+    if (!$status)
     {
         my $handle;
-        open($handle,">>$installdir/data-$locale/postgresql.conf");
+        open($handle,">>$installdir/data-$locale/postgresql.conf")
+          ||die "opening $installdir/data-$locale/postgresql.conf: $!";
+
+        if (!$using_msvc && $Config{osname} !~ /msys|MSWin/)
+        {
+            my $param =
+              $branch eq 'REL9_2_STABLE'
+              ? "unix_socket_directory"
+              :"unix_socket_directories";
+            print $handle "$param = '$tmpdir'\n";
+            print $handle "listen_addresses = ''\n";
+        }
+        else
+        {
+            print $handle "listen_addresses = 'localhost'\n";
+        }
+
         foreach my $line (@{$extra_config->{$branch}})
         {
             print $handle "$line\n";
         }
         close($handle);
+
+        if ($using_msvc || $Config{osname} =~ /msys|MSWin/)
+        {
+            my $pg_regress;
+
+            if ($using_msvc)
+            {
+                $pg_regress = "$abspgsql/Release/pg_regress/pg_regress";
+                unless (-e "$pg_regress.exe")
+                {
+                    $pg_regress =~ s/Release/Debug/;
+                }
+            }
+            else
+            {
+                $pg_regress = "$abspgsql/src/test/regress/pg_regress";
+            }
+            my $roles =
+              $branch ne 'HEAD' && $branch lt 'REL9_5'
+              ?"buildfarm,dblink_regression_test"
+              : "buildfarm";
+            my $setauth = "--create-role $roles --config-auth";
+            my @lines = run_log("$pg_regress $setauth data-$locale");
+            $status = $? >> 8;
+            push(@initout, "======== set config-auth ======\n", @lines);
+        }
+
     }
+
+    chdir $branch_root;
 
     writelog("initdb-$locale",\@initout);
     print "======== initdb log ($locale) ===========\n",@initout
@@ -1288,15 +1325,11 @@ sub start_db
     system($cmd);
     my $status = $? >>8;
     chdir($branch_root);
-    my $handle;
-    open($handle,"$installdir/startlog");
-    my @ctlout = <$handle>;
-    close($handle);
+    my @ctlout = file_lines("$installdir/startlog");
 
-    if (open($handle,"$installdir/logfile"))
+    if (-s "$installdir/logfile")
     {
-        my @loglines = <$handle>;
-        close($handle);
+        my @loglines = file_lines("$installdir/logfile");
         push(@ctlout,"=========== db log file ==========\n",@loglines);
     }
     writelog("startdb-$locale-$started_times",\@ctlout);
@@ -1321,18 +1354,12 @@ sub stop_db
     system($cmd);
     my $status = $? >>8;
     chdir($branch_root);
-    my $handle;
-    open($handle,"$installdir/stoplog");
-    my @ctlout = <$handle>;
-    close($handle);
+    my @ctlout = file_lines("$installdir/stoplog");
 
-    if (open($handle,"$installdir/logfile"))
+    if (-s "$installdir/logfile")
     {
-
-        # go to where the log file ended before we tried to shut down.
-        seek($handle, $logpos, SEEK_SET);
-        my @loglines = <$handle>;
-        close($handle);
+        # get contents from where log file ended before we tried to shut down.
+        my @loglines = file_lines("$installdir/logfile", $logpos);
         push(@ctlout,"=========== db log file ==========\n",@loglines);
     }
     writelog("stopdb-$locale-$started_times",\@ctlout);
@@ -1340,41 +1367,6 @@ sub stop_db
       if ($verbose > 1);
     send_result("StopDb-$locale:$started_times",$status,\@ctlout) if $status;
     $dbstarted=undef;
-}
-
-sub get_stack_trace
-{
-    my $bindir = shift;
-    my $pgdata = shift;
-
-    # no core = no result
-    my @cores = glob("$pgdata/$core_file_glob");
-    return () unless @cores;
-
-    # no gdb = no result
-    system "gdb --version > $devnull 2>&1";
-    my $status = $? >>8;
-    return () if $status;
-
-    my $cmdfile = "./gdbcmd";
-    my $handle;
-    open($handle, ">$cmdfile");
-    print $handle "bt\n";
-    close($handle);
-
-    my @trace;
-
-    foreach my $core (@cores)
-    {
-        my @onetrace = `gdb -x $cmdfile --batch $bindir/postgres $core 2>&1`;
-        push(@trace,
-            "\n\n================== stack trace: $core ==================\n",
-            @onetrace);
-    }
-
-    unlink $cmdfile;
-
-    return @trace;
 }
 
 sub make_install_check
@@ -1386,12 +1378,12 @@ sub make_install_check
     my @checklog;
     unless ($using_msvc)
     {
-        @checklog = `cd $pgsql/src/test/regress && $make installcheck 2>&1`;
+        @checklog =run_log("cd $pgsql/src/test/regress && $make installcheck");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @checklog = `perl vcregress.pl installcheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl installcheck");
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1401,13 +1393,7 @@ sub make_install_check
     {
         next unless (-e $logfile );
         push(@checklog,"\n\n================== $logfile ==================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
+        push(@checklog,file_lines($logfile));
     }
     if ($status)
     {
@@ -1430,12 +1416,12 @@ sub make_contrib_install_check
     unless ($using_msvc)
     {
         @checklog =
-          `cd $pgsql/contrib && $make USE_MODULE_DB=1 installcheck 2>&1`;
+          run_log("cd $pgsql/contrib && $make USE_MODULE_DB=1 installcheck");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @checklog = `perl vcregress.pl contribcheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl contribcheck");
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1445,13 +1431,7 @@ sub make_contrib_install_check
     {
         next unless (-e $logfile);
         push(@checklog,"\n\n================= $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
+        push(@checklog,file_lines($logfile));
     }
     if ($status)
     {
@@ -1473,13 +1453,14 @@ sub make_testmodules_install_check
     my @checklog;
     unless ($using_msvc)
     {
-        @checklog =
-`cd $pgsql/src/test/modules && $make USE_MODULE_DB=1 installcheck 2>&1`;
+        my $cmd =
+          "cd $pgsql/src/test/modules && $make USE_MODULE_DB=1 installcheck";
+        @checklog = run_log($cmd);
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @checklog = `perl vcregress.pl modulescheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl modulescheck");
         chdir $branch_root;
     }
     my $status = $? >>8;
@@ -1489,13 +1470,7 @@ sub make_testmodules_install_check
     {
         next unless (-e $logfile);
         push(@checklog,"\n\n================= $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
+        push(@checklog,file_lines($logfile));
     }
     if ($status)
     {
@@ -1753,12 +1728,12 @@ sub make_pl_install_check
     my @checklog;
     unless ($using_msvc)
     {
-        @checklog = `cd $pgsql/src/pl && $make installcheck 2>&1`;
+        @checklog = run_log("cd $pgsql/src/pl && $make installcheck");
     }
     else
     {
         chdir("$pgsql/src/tools/msvc");
-        @checklog = `perl vcregress.pl plcheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl plcheck");
         chdir($branch_root);
     }
     my $status = $? >>8;
@@ -1771,13 +1746,7 @@ sub make_pl_install_check
     {
         next unless (-e $logfile);
         push(@checklog,"\n\n================= $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
+        push(@checklog,file_lines($logfile));
     }
     if ($status)
     {
@@ -1804,12 +1773,12 @@ sub make_isolation_check
     {
         my $cmd =
           "cd $pgsql/src/test/isolation && $make NO_LOCALE=1 installcheck";
-        @makeout = `$cmd 2>&1`;
+        @makeout = run_log($cmd);
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl isolationcheck 2>&1`;
+        @makeout = run_log("perl vcregress.pl isolationcheck");
         chdir $branch_root;
     }
 
@@ -1820,16 +1789,12 @@ sub make_isolation_check
     push(@logs,"$installdir/logfile");
     unshift(@logs,"$pgsql/src/test/isolation/regression.diffs")
       if (-e "$pgsql/src/test/isolation/regression.diffs");
+    unshift(@logs,"$pgsql/src/test/isolation/output_iso/regression.diffs")
+      if (-e "$pgsql/src/test/isolation/output_iso/regression.diffs");
     foreach my $logfile (@logs)
     {
         push(@makeout,"\n\n================== $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@makeout,$_);
-        }
-        close($handle);
+        push(@makeout,file_lines($logfile));
     }
     if ($status)
     {
@@ -1845,24 +1810,22 @@ sub make_isolation_check
     $steps_completed .= " IsolationCheck";
 }
 
-sub make_bin_check {
-    return unless step_wanted('bin-installcheck');
+
+sub run_tap_test
+{
+    my $dir = shift;
+    my $testname = shift;
+    my $is_install_check = shift;
 
     # tests only came in with 9.4
     return unless ($build_version ge "9.4.0");
-    if ($using_msvc)
-    {
-        return unless $config_opts->{tap_tests};
-    }
-    else
-    {
-        return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
-    }
+    my $target = $is_install_check ? "installcheck" : "check";
 
-    print time_str(),"running make bin check ...\n" if $verbose;
+    return unless step_wanted("$testname-$target");
+
     # fix path temporarily on msys
     my $save_path = $ENV{PATH};
-    if ($^O eq 'msys')
+    if ($Config{osname} eq 'msys' && $branch ne 'HEAD' && $branch lt 'A')
     {
         my $perlpathdir = dirname($Config{perlpath});
         $ENV{PATH} = "$perlpathdir:$ENV{PATH}";
@@ -1870,52 +1833,60 @@ sub make_bin_check {
 
     my @makeout;
 
-    unless ($using_msvc)
+    my $pflags = "PROVE_FLAGS=--timer";
+    if (exists $ENV{PROVE_FLAGS})
     {
-        @makeout =`cd $pgsql/src/bin && $make check 2>&1`;
+        $pflags =
+          $ENV{PROVE_FLAGS}
+          ?"PROVE_FLAGS=$ENV{PROVE_FLAGS}"
+          :"";
+    }
+
+    if ($using_msvc)
+    {
+        my $test = substr($dir,length("$pgsql/"));
+        chdir "$pgsql/src/tools/msvc";
+        @makeout = run_log("perl vcregress.pl taptest $pflags $test");
+        chdir $branch_root;
     }
     else
     {
-        chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl bincheck 2>&1`;
-        chdir $branch_root;
+        my $instflags = $temp_installs >= 3 ? "NO_TEMP_INSTALL=yes" : "";
+
+        @makeout =
+          run_log("cd $dir && $make NO_LOCALE=1 $pflags $instflags $target");
     }
 
     my $status = $? >>8;
 
-    my @logs = glob("$pgsql/src/bin/*/tmp_check/log/*");
+    my @logs = glob("$dir/tmp_check/log/*");
 
     foreach my $logfile (@logs)
     {
         push(@makeout,"\n\n================== $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@makeout,$_);
-        }
-        close($handle);
+        push(@makeout,file_lines($logfile));
     }
 
-    writelog('bin-check',\@makeout);
-    print "======== make bin-check log ===========\n",@makeout
+    writelog("$testname-$target",\@makeout);
+    print "======== make $testname-$target log ===========\n",@makeout
       if ($verbose > 1);
 
     # restore path
     $ENV{PATH} = $save_path;
 
-    send_result('BinCheck',$status,\@makeout) if $status;
-    $steps_completed .= " BinCheck";
+    my $captarget = $is_install_check ? "InstallCheck" : "Check";
+    my $captest = $testname;
 
-
+    send_result("$captest$captarget",$status,\@makeout) if $status;
+    $steps_completed .= " $captest$captarget";
 }
 
-sub make_bin_installcheck
+sub run_bin_tests
 {
-    return unless step_wanted('bin-installcheck');
+    return unless step_wanted('bin-check');
 
     # tests only came in with 9.4
-    return unless ($build_version ge "9.4.0");
+    return unless ($branch eq 'HEAD' or $build_version ge '9.4.0');
 
     # don't run unless the tests have been enabled
     if ($using_msvc)
@@ -1927,54 +1898,39 @@ sub make_bin_installcheck
         return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
     }
 
-    print time_str(),"running make bin installcheck ...\n" if $verbose;
+    print time_str(),"running bin checks ...\n" if $verbose;
 
-    # fix path temporarily on msys
-    my $save_path = $ENV{PATH};
-    if ($^O eq 'msys')
+    foreach my $bin (glob("$pgsql/src/bin/*"))
     {
-        my $perlpathdir = dirname($Config{perlpath});
-        $ENV{PATH} = "$perlpathdir:$ENV{PATH}";
+        next unless -d "$bin/t";
+        run_tap_test($bin, basename($bin), undef);
     }
+}
 
-    my @makeout;
+sub run_misc_tests
+{
+    return unless step_wanted('misc-check');
 
-    unless ($using_msvc)
+    # tests only came in with 9.4
+    return unless ($branch eq 'HEAD' or $build_version ge '9.4');
+
+    # don't run unless the tests have been enabled
+    if ($using_msvc)
     {
-        @makeout =`cd $pgsql/src/bin && $make NO_LOCALE=1 installcheck 2>&1`;
+        return unless $config_opts->{tap_tests};
     }
     else
     {
-        chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl bincheck 2>&1`;
-        chdir $branch_root;
+        return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
     }
 
-    my $status = $? >>8;
+    print time_str(),"running make misc checks ...\n" if $verbose;
 
-    my @logs = glob("$pgsql/src/bin/*/tmp_check/log/*");
-
-    foreach my $logfile (@logs)
+    foreach my $test (qw(recovery subscription authentication))
     {
-        push(@makeout,"\n\n================== $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@makeout,$_);
-        }
-        close($handle);
+        next unless -d "$pgsql/src/test/$test/t";
+        run_tap_test("$pgsql/src/test/$test", $test, undef);
     }
-
-    writelog('bin-install-check',\@makeout);
-    print "======== make bin-install-check log ===========\n",@makeout
-      if ($verbose > 1);
-
-    # restore path
-    $ENV{PATH} = $save_path;
-
-    send_result('BinInstallCheck',$status,\@makeout) if $status;
-    $steps_completed .= " BinInstallCheck";
 }
 
 sub make_check
@@ -1985,12 +1941,13 @@ sub make_check
     my @makeout;
     unless ($using_msvc)
     {
-        @makeout =`cd $pgsql/src/test/regress && $make NO_LOCALE=1 check 2>&1`;
+        @makeout =
+          run_log("cd $pgsql/src/test/regress && $make NO_LOCALE=1 check");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl check 2>&1`;
+        @makeout = run_log("perl vcregress.pl check");
         chdir $branch_root;
     }
 
@@ -2004,13 +1961,7 @@ sub make_check
     foreach my $logfile (@logs)
     {
         push(@makeout,"\n\n================== $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@makeout,$_);
-        }
-        close($handle);
+        push(@makeout,file_lines($logfile));
     }
     my $base = "$pgsql/src/test/regress/tmp_check";
     if ($status)
@@ -2032,6 +1983,12 @@ sub make_check
       if ($verbose > 1);
 
     send_result('Check',$status,\@makeout) if $status;
+    $temp_installs++;
+    if ($using_msvc)
+    {
+        # MSVC installs everything, so we now have a complete temp install
+        $ENV{NO_TEMP_INSTALL} = "yes";
+    }
     $steps_completed .= " Check";
 }
 
@@ -2152,12 +2109,14 @@ sub make_ecpg_check
     if ($using_msvc)
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl ecpgcheck 2>&1`;
+        @makeout = run_log("perl vcregress.pl ecpgcheck");
         chdir $branch_root;
     }
     else
     {
-        @makeout = `cd  $ecpg_dir && $make NO_LOCALE=1 check 2>&1`;
+        my $instflags = $temp_installs >= 3 ? "NO_TEMP_INSTALL=yes" : "";
+        @makeout =
+          run_log("cd  $ecpg_dir && $make NO_LOCALE=1 $instflags check");
     }
     my $status = $? >>8;
 
@@ -2168,13 +2127,7 @@ sub make_ecpg_check
     foreach my $logfile (@logs)
     {
         push(@makeout,"\n\n================== $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@makeout,$_);
-        }
-        close($handle);
+        push(@makeout,file_lines($logfile));
     }
     if ($status)
     {
@@ -2247,8 +2200,9 @@ sub find_typedefs
         next unless -f $bin;
         if (@err == 1) # Linux and sometimes windows
         {
-            @dumpout =
-`$objdump -W $bin 2>/dev/null | egrep -A3 DW_TAG_typedef 2>/dev/null`;
+            my $cmd = "$objdump -W $bin 2>/dev/null | "
+              ."egrep -A3 DW_TAG_typedef 2>/dev/null";
+            @dumpout = `$cmd`; # no run_log because of redirections
             foreach (@dumpout)
             {
                 @flds = split;
@@ -2263,8 +2217,10 @@ sub find_typedefs
         {
 
             # FreeBSD, similar output to Linux
-            @dumpout =
-`readelf -w $bin 2>/dev/null | egrep -A3 DW_TAG_typedef 2>/dev/null`;
+            my $cmd = "readelf -w $bin 2>/dev/null | "
+              ."egrep -A3 DW_TAG_typedef 2>/dev/null";
+
+            @dumpout = ` $cmd`; # no run_log due to redirections
             foreach (@dumpout)
             {
                 @flds = split;
@@ -2275,6 +2231,7 @@ sub find_typedefs
         }
         elsif ($using_osx)
         {
+            # no run_log due to redirections.
             @dumpout =
               `dwarfdump $bin 2>/dev/null | egrep -A2 TAG_typedef 2>/dev/null`;
             foreach (@dumpout)
@@ -2288,6 +2245,7 @@ sub find_typedefs
         }
         else
         {
+            # no run_log doe to redirections.
             @dumpout = `$objdump --stabs $bin 2>/dev/null`;
             foreach (@dumpout)
             {
@@ -2308,13 +2266,13 @@ sub find_typedefs
     my %foundwords;
 
     my $setfound = sub{
+
+        # $_ is the name of the file being examined
+        # its directory is our current cwd
+
         return unless (-f $_ && /^.*\.[chly]\z/);
-        local ($/) = undef;
         my @lines;
-        my $handle;
-        open($handle,$_);
-        my $src = <$handle>;
-        close($handle);
+        my $src = file_contents($_);
 
         # strip C comments - see perlfaq6 for an explanation
         # of the complex regex.
@@ -2327,8 +2285,43 @@ sub find_typedefs
         }
         else
         {
-            $src =~
-s#/\*[^*]*\*+([^/*][^*]*\*+)*/|("(\\.|[^"\\])*"|'(\\.|[^'\\])*'|.[^/"'\\]*)#defined $2 ? $2 : ""#gse;
+            # use the long form here to keep lines under 80
+            $src =~s{
+           /\*         ##  Start of /* ... */ comment
+           [^*]*\*+    ##  Non-* followed by 1-or-more *'s
+           (
+             [^/*][^*]*\*+
+           )*          ##  0-or-more things which don't start with /
+                       ##    but do end with '*'
+           /           ##  End of /* ... */ comment
+
+         |             ##     OR  various things which aren't comments:
+
+           (
+             "         ##  Start of " ... " string
+             (
+               \\.     ##  Escaped char
+             |         ##    OR
+               [^"\\]  ##  Non "\
+             )*
+             "         ##  End of " ... " string
+
+           |           ##     OR
+
+             '         ##  Start of ' ... ' string
+             (
+               \\.     ##  Escaped char
+             |         ##    OR
+               [^'\\]  ##  Non '\
+             )*
+             '         ##  End of ' ... ' string
+
+           |           ##     OR
+
+             .         ##  Anything other char
+             [^/"'\\]* ##  Chars which doesn't start a comment, string or escape
+           )
+         }{defined $2 ? $2 : ""}gxse;
         }
         foreach my $word (split(/\W+/,$src))
         {
@@ -2364,7 +2357,8 @@ sub configure
         );
 
         my $handle;
-        open($handle,">$pgsql/src/tools/msvc/config.pl");
+        open($handle,">$pgsql/src/tools/msvc/config.pl")
+          || die "opening $pgsql/src/tools/msvc/config.pl: $!";
         print $handle @text;
         close($handle);
 
@@ -2393,6 +2387,49 @@ sub configure
     my $confstr =
       join(" ",@quoted_opts,"--prefix=$installdir","--with-pgport=$buildport");
 
+    if ($use_accache)
+    {
+        # set up cache directory for autoconf cache
+        my $accachedir = "$buildroot/accache-$animal";
+        mkpath $accachedir;
+        $accachedir = abs_path($accachedir);
+
+        # remove old cache file if configure script is newer
+        # in the case of from_source, or has been changed for this run
+        # or the run is forced, in the usual build from git case
+        my $accachefile = "$accachedir/config-$branch.cache";
+        if (-e $accachefile)
+        {
+            my $obsolete;
+            my $cache_mod = (stat $accachefile)[9];
+            if ($from_source)
+            {
+                my $conffile = "$from_source/configure";
+                $obsolete = -e $conffile && (stat $conffile)[9] > $cache_mod;
+            }
+            else
+            {
+                $obsolete = grep { /^configure / } @changed_files;
+                $obsolete ||= $last_status == 0;
+            }
+
+            # also remove if the buildfarm config file is newer, or the options
+            # have been changed via --config_set.
+            #
+            # we currently don't allow overriding the config file
+            # environment settings via --config-set, but if we did
+            # we'd have to account for that here too.
+            #
+            # if the user alters the environment that's set externally
+            # for the buildfarm we can't really do anything about that.
+            $obsolete ||= grep {/config_opts/} @config_set;
+            $obsolete ||= $buildconf_mod > $cache_mod;
+
+            unlink $accachefile if $obsolete;
+        }
+        $confstr .= " --cache-file='$accachefile'";
+    }
+
     my $env = $PGBuild::conf{config_env};
 
     my $envstr = "";
@@ -2401,9 +2438,12 @@ sub configure
         $envstr .= "$key='$val' ";
     }
 
-    my $conf_path = $use_vpath ? "../pgsql/configure" : "./configure";
+    my $conf_path =
+      $use_vpath
+      ?($from_source ? "$from_source/configure" : "../pgsql/configure")
+      : "./configure";
 
-    my @confout = `cd $pgsql && $envstr $conf_path $confstr 2>&1`;
+    my @confout = run_log("cd $pgsql && $envstr $conf_path $confstr");
 
     my $status = $? >> 8;
 
@@ -2412,15 +2452,11 @@ sub configure
 
     writelog('configure',\@confout);
 
-    my ($handle,@config);
+    my (@config);
 
-    if (open($handle,"$pgsql/config.log"))
+    if (-s "$pgsql/config.log")
     {
-        while(<$handle>)
-        {
-            push(@config,$_);
-        }
-        close($handle);
+        @config = file_lines("$pgsql/config.log");
         writelog('config',\@config);
     }
 
@@ -2436,34 +2472,11 @@ sub configure
     $steps_completed .= " Configure";
 }
 
-sub find_last
-{
-    my $which = shift;
-    my $stname = $st_prefix . "last.$which";
-    my $handle;
-    open($handle,$stname) or return undef;
-    my $time = <$handle>;
-    close($handle);
-    chomp $time;
-    return $time + 0;
-}
+# a reference to this subroutine is stored in the Utils module and it is called
+# everywhere as send_result(...)
 
-sub set_last
+sub send_res
 {
-    my $which = shift;
-    my $stname = $st_prefix . "last.$which";
-    my $st_now = shift || time;
-    my $handle;
-    open($handle,">$stname") or die "opening $stname: $!";
-    print $handle "$st_now\n";
-    close($handle);
-}
-
-sub send_result
-{
-
-    # clean up temp file
-    $extraconf = undef;
 
     my $stage = shift;
 
@@ -2519,7 +2532,7 @@ sub send_result
 
     my $txfname = "$lrname/web-txn.data";
     my $txdhandle;
-    open($txdhandle,">$txfname");
+    open($txdhandle,">$txfname") || die "opening $txfname: $!";
     print $txdhandle $savedata;
     close($txdhandle);
 
@@ -2566,8 +2579,9 @@ sub send_result
 
     # this should now only apply to older Msys installs. All others should
     # be running with perl >= 5.8 since that's required to build postgres
-    # anyway
-    if (!$^V or $^V lt v5.8.0)
+    # anyway. However, the Msys DTK perl doesn't handle https.
+    if (  !$^V
+        or $^V lt v5.8.0 ||($Config{osname} eq 'msys' && $target =~ /^https/))
     {
 
         unless (-x "$aux_path/run_web_txn.pl")
@@ -2609,13 +2623,16 @@ sub send_result
 
 sub get_config_summary
 {
-    my $handle;
     my $config = "";
-    unless ($using_msvc)
+
+    # if configure bugs out there might not be a log file at all
+    # in that case just return the rest of the summary.
+
+    unless ($using_msvc || !-e "$pgsql/config.log" )
     {
-        open($handle,"$pgsql/config.log") || return undef;
+        my @lines = file_lines("$pgsql/config.log");
         my $start = undef;
-        while (<$handle>)
+        foreach (@lines)
         {
             if (!$start && /created by PostgreSQL configure/)
             {
@@ -2628,53 +2645,21 @@ sub get_config_summary
             next if /= <?unknown>?/;
 
             # split up long configure line
-            if (m!\$.*configure.*--with! && length > 70)
+            if (m!\$.*configure.*--with!)
             {
-                my $pos = index($_," ",70);
-                substr($_,$pos+1,0,"\\\n        ") if ($pos > 0);
-                $pos = index($_," ",140);
-                substr($_,$pos+1,0,"\\\n        ") if ($pos > 0);
-                $pos = index($_," ",210);
-                substr($_,$pos+1,0,"\\\n        ") if ($pos > 0);
+                foreach my $lpos (70,140,210,280,350,420)
+                {
+                    my $pos = index($_," ",$lpos);
+                    substr($_,$pos+1,0,"\\\n        ") if ($pos > 0);
+                }
             }
             $config .= $_;
         }
-        close($handle);
         $config .=
           "\n========================================================\n";
     }
     $config .= get_script_config_dump();
     return $config;
-}
-
-sub check_port_is_ok
-{
-    my $port = shift;
-    my $report = shift; # Pre or Post
-    my $stage = "${report}-run-port-check";
-    my @log;
-    my $found = undef;
-
-    if ($Config{osname} !~ /msys|MSWin/)
-    {
-
-        # look for a unix socket except on Windows -
-        # cygwin does have them, though
-        # could connect, but just finding the socket file should do,
-        # since its existence will cause us grief.
-        $found = -S "/tmp/.s.PGSQL.$port";
-    }
-    if ($found)
-    {
-        eval{unlink glob "/tmp/.s.PGSQL.$port /tmp/.s.PGSQL.$port.*"
-              || die $!;};
-
-        if ($@)
-        {
-            push(@log,"unable to clear listening port $port\n$@");
-            send_result($stage,99,\@log);
-        }
-    }
 }
 
 sub get_script_config_dump
@@ -2683,7 +2668,7 @@ sub get_script_config_dump
         %PGBuild::conf,  # shallow copy
         script_version => $VERSION,
         invocation_args => \@invocation_args,
-        steps_completed => $steps_completed,
+        steps_completed => [ split(/\s+/,$steps_completed) ],
         orig_env => $orig_env,
         bf_perl_version => "$Config{version}",
     };

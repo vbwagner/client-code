@@ -17,7 +17,7 @@ use warnings FATAL => 'qw';
 
 use vars qw(%conf);
 
-# use vars qw($VERSION); $VERSION = 'REL_4.18';
+# use vars qw($VERSION); $VERSION = 'REL_5';
 
 my $branch;
 {
@@ -35,6 +35,7 @@ my $branch;
     scm => 'git', # or 'cvs'
     git_keep_mirror => 1,  # manage a git mirror in the build root
     git_ignore_mirror_failure => 1, # ignore failures in fetching to mirror
+    git_gc_hours => 7 * 24, # garbage collect once a week, 0/undef to disable
 
     # use symlinked git repo from non-HEAD branches,
     # like git-new-workdir does
@@ -58,7 +59,8 @@ my $branch;
 
     # where and how to build
     # must be absolute, can be either Unix or Windows style for MSVC
-    build_root => '/path/to/buildroot',
+    # undef means default, buildroot dir in script directory
+    build_root =>   undef, #  or '/path/to/buildroot',
     use_vpath => undef, # set true to do vpath builds
 
     # path to directory with auxiliary web script
@@ -70,10 +72,10 @@ my $branch;
     core_file_glob => "core*",   # Linux style, use "*.core" for BSD
 
     # where to report status
-    target => "http://www.pgbuildfarm.org/cgi-bin/pgstatus.pl",
+    target => "https://buildfarm.postgresql.org/cgi-bin/pgstatus.pl",
 
     # where to report change in OS version or compiler version
-    upgrade_target => "http://www.pgbuildfarm.org/cgi-bin/upgrade.pl",
+    upgrade_target => "https://buildfarm.postgresql.org/cgi-bin/upgrade.pl",
 
     # change this to a true value if using MSVC, in which case also
     # see MSVC section below
@@ -139,6 +141,10 @@ my $branch;
 
     use_default_ccache_dir => 1,
 
+    # set this to allow caching of the configure script's results
+
+    use_accache => 1,
+
     # env settings to apply within build/report process
     # these settings will be seen by all the processes, including the
     # configure process.
@@ -174,6 +180,12 @@ my $branch;
 
         # comment out if not using ccache
         CC => 'ccache gcc',
+
+        # In the rare event that you need to tell configure where the prove
+        # program lives instead of letting it work it out you do it here.
+        # Msys is one such case.
+        # PROVE => '/bin/prove',
+
     },
 
     # don't use --prefix or --with-pgport here
@@ -206,7 +218,7 @@ my $branch;
     # branch-specific settings.
     extra_config =>{
         DEFAULT => [
-            q(log_line_prefix = '%m [%c:%l] '),
+            q(log_line_prefix = '%m [%p:%l] '),
             "log_connections = 'true'",
             "log_disconnections = 'true'",
             "log_statement = 'all'",
@@ -244,6 +256,10 @@ if ($branch eq 'global')
 
     # or 'HEAD_PLUS_LATEST' or 'HEAD_PLUS_LATEST2'
     # or [qw( HEAD RELx_y_STABLE etc )]
+
+    # set this if you are running multiple animals and want them coordinated
+
+    # $conf{global_lock_dir} = '/path/to/lockdir';
 
 }
 
@@ -336,6 +352,12 @@ if ($branch eq 'HEAD')
 {
 
     #	push(@{$conf{config_opts}},"--enable-depend");
+
+    #   Note that config_opts is a hashref for MSVC, rather than
+    #   an arrayref like elsewhere. That means the right way to set
+    #   semething there is like this:
+    #
+    #   $conf{config_opts}->{openssl} = 'c:\path\to\openssl\installation';
 }
 elsif ($branch =~ /^REL7_/)
 {

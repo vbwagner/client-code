@@ -2,19 +2,23 @@
 
 =comment
 
-Copyright (c) 2003-2010, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
-=cut 
+=cut
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 use strict;
 use warnings;
 use Fcntl qw(:flock :seek);
-use PGBuild::Options;
+use File::Spec;
 use File::Basename;
+
+BEGIN { use lib File::Spec->rel2abs(dirname(__FILE__)); }
+
+use PGBuild::Options;
 
 # older msys is ging to use a different perl to run LWP, so we can't absolutely
 # require this module there
@@ -53,6 +57,8 @@ $branch = 'global';
 # process config file
 #
 require $buildconf;
+
+PGBuild::Options::fixup_conf(\%PGBuild::conf, \@config_set);
 
 unless (
     (
@@ -186,11 +192,8 @@ sub find_last_status
     my $status_file =
       "$PGBuild::conf{build_root}/$brnch/$PGBuild::conf{animal}.last.status";
     return 0 unless (-e  $status_file);
-    my $handle;
-    open($handle,$status_file) || dir $!;
-    my $ts = <$handle>;
+    my $ts = file_contents($status_file);
     chomp $ts;
-    close($handle);
     return $ts + 0;
 }
 

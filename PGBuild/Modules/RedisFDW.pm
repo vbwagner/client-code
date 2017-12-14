@@ -1,34 +1,26 @@
-
 # Package Namespace is hardcoded. Modules must live in
 # PGBuild::Modules
 
-=comment
-
-Copyright (c) 2003-2017, Andrew Dunstan
-
-See accompanying License file for license details
-
-=cut
-
-package PGBuild::Modules::FileTextArrayFDW;
+package PGBuild::Modules::RedisFDW;
 
 use PGBuild::Options;
 use PGBuild::SCM;
 use PGBuild::Utils;
+
+use Fcntl qw(:seek);
 
 use strict;
 
 # strip required namespace from package name
 (my $MODULE = __PACKAGE__ ) =~ s/PGBuild::Modules:://;
 
-use vars qw($VERSION); $VERSION = 'REL_5';
+use vars qw($VERSION); $VERSION = 'REL_4.10';
 
 my $hooks = {
     'checkout' => \&checkout,
     'setup-target' => \&setup_target,
 
     # 'need-run' => \&need_run,
-
     # 'configure' => \&configure,
     'build' => \&build,
 
@@ -49,8 +41,6 @@ sub setup
 
     return unless $branch ge 'REL9_1_STABLE' || $branch eq 'HEAD';
 
-    return unless step_wanted("$MODULE-build");
-
     # could even set up several of these (e.g. for different branches)
     my $self  = {
         buildroot => $buildroot,
@@ -62,14 +52,14 @@ sub setup
 
     my $scmconf ={
         scm => 'git',
-        scmrepo => 'git://github.com/adunstan/file_text_array_fdw.git',
+        scmrepo => 'git://github.com/pg-redis-fdw/redis_fdw.git',
         git_reference => undef,
         git_keep_mirror => 'true',
         git_ignore_mirror_failure => 'true',
         build_root => $self->{buildroot},
     };
 
-    $self->{scm} = new PGBuild::SCM $scmconf, 'file_text_array_fdw';
+    $self->{scm} = new PGBuild::SCM $scmconf, 'redis_fdw';
     my $where = $self->{scm}->get_build_path();
     $self->{where} = $where;
 
@@ -104,14 +94,6 @@ sub setup_target
 
 }
 
-sub configure
-{
-    my $self = shift;
-
-    print time_str(), "configuring $MODULE\n" if	$verbose;
-
-}
-
 sub build
 {
     my $self = shift;
@@ -120,7 +102,9 @@ sub build
 
     my $cmd = "PATH=../inst:$ENV{PATH} make USE_PGXS=1";
 
-    my @makeout = run_log("cd $self->{where} && $cmd");
+    #	print STDERR `pwd`,',',-e $self->{where}, ": $cmd\n";
+
+    my @makeout = `cd $self->{where} && $cmd 2>&1`;
 
     my $status = $? >>8;
     writelog("$MODULE-build",\@makeout);
@@ -135,22 +119,15 @@ sub install
 
     print time_str(), "installing $MODULE\n" if	$verbose;
 
-    my $cmd = "PATH=../inst:$ENV{PATH} make USE_PGXS=1 install";
+    my $cmd = "make USE_PGXS=1 USE_MODULE_DB=1 install";
 
-    my @log = run_log("cd $self->{where} && $cmd");
+    my @log = `cd $self->{where} && $cmd 2>&1`;
 
     my $status = $? >>8;
     writelog("$MODULE-install",\@log);
     print "======== install log ===========\n",@log if ($verbose > 1);
     send_result("$MODULE-install",$status,\@log) if $status;
 
-}
-
-sub check
-{
-    my $self = shift;
-
-    print time_str(), "checking ",__PACKAGE__,"\n" if	$verbose;
 }
 
 sub installcheck
@@ -160,37 +137,44 @@ sub installcheck
 
     return unless $locale eq 'C';
 
-    my $make = $self->{bfconf}->{make};
+    my $branch = $self->{pgbranch};
+
+    # no testing in 9.1
+    return unless $branch gt 'REL9_1_STABLE' || $branch eq 'HEAD';
 
     print time_str(), "install-checking $MODULE\n" if	$verbose;
 
-    my $cmd = "$make USE_PGXS=1 USE_MODULE_DB=1 installcheck";
+    my $cmd = "make USE_PGXS=1 USE_MODULE_DB=1 installcheck";
 
-    my @log = run_log("cd $self->{where} && $cmd");
+    my $installdir = "$self->{buildroot}/$self->{pgbranch}/inst";
+    my $logpos = -s "$installdir/logfile" || 0;
+
+    my @log = `cd $self->{where} && $cmd 2>&1`;
 
     my $status = $? >>8;
-    my $installdir = "$self->{buildroot}/$self->{pgbranch}/inst";
-    my @logfiles =("$self->{where}/regression.diffs","$installdir/logfile");
+    my @logfiles =
+      ("$self->{where}/test/regression.diffs","$installdir/logfile");
     foreach my $logfile(@logfiles)
     {
         last unless $status;
         next unless (-e $logfile );
+        my $lpos = 0;
+        $lpos = $logpos if $logfile  eq "$installdir/logfile";
         push(@log,"\n\n================== $logfile ==================\n");
-        push(@log,file_lines($logfile));
+        push(@log,file_lines($logfile,$lpos));
     }
 
     writelog("$MODULE-installcheck-$locale",\@log);
     print "======== installcheck ($locale) log ===========\n",@log
       if ($verbose > 1);
     send_result("$MODULE-installcheck-$locale",$status,\@log) if $status;
-
 }
 
 sub cleanup
 {
     my $self = shift;
 
-    print time_str(), "cleaning up $MODULE\n" if	$verbose > 1;
+    print time_str(), "cleaning up $MODULE\n" if $verbose > 1;
 
     system("rm -rf $self->{where}");
 }

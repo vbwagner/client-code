@@ -1,13 +1,23 @@
 
 package PGBuild::Modules::TestDecoding;
 
+=comment
+
+Copyright (c) 2003-2017, Andrew Dunstan
+
+See accompanying License file for license details
+
+=cut
+
 use PGBuild::Options;
 use PGBuild::SCM;
+use PGBuild::Utils qw(:DEFAULT $steps_completed $temp_installs);
+
 use File::Basename;
 
 use strict;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 my $hooks = {'check' => \&check,};
 
@@ -34,7 +44,7 @@ sub setup
     };
     bless($self, $class);
 
-    main::register_module_hooks($self,$hooks);
+    register_module_hooks($self,$hooks);
 
 }
 
@@ -42,9 +52,9 @@ sub check
 {
     my $self = shift;
 
-    return unless main::step_wanted('test-decoding-check');
+    return unless step_wanted('test-decoding-check');
 
-    print main::time_str(), "checking test-decoding\n" if	$verbose;
+    print time_str(), "checking test-decoding\n" if	$verbose;
 
     my $make = $self->{bfconf}->{make};
 
@@ -59,39 +69,42 @@ sub check
     }
     else
     {
-        my $cmd = "cd $self->{pgsql}/contrib/test_decoding && $make check";
-        @checklog = `$cmd 2>&1`;
+        my $instflags =
+          $temp_installs >= 3
+          ? "NO_TEMP_INSTALL=$temp_installs"
+          : "";
+        my $cmd =
+          "cd $self->{pgsql}/contrib/test_decoding && $make $instflags check";
+        @checklog = run_log($cmd);
     }
 
     my @logfiles = glob(
         "$self->{pgsql}/contrib/test_decoding/regression_output/log/*.log
-		   $self->{pgsql}/contrib/test_decoding/regression_output/*.diffs
-		   $self->{pgsql}/contrib/test_decoding/isolation_output/log/*.log
-		   $self->{pgsql}/contrib/test_decoding/isolation_output/*.diffs"
+         $self->{pgsql}/contrib/test_decoding/regression_output/*.diffs
+         $self->{pgsql}/contrib/test_decoding/isolation_output/log/*.log
+         $self->{pgsql}/contrib/test_decoding/isolation_output/*.diffs
+         $self->{pgsql}/contrib/test_decoding/log/*.log
+         $self->{pgsql}/contrib/test_decoding/*.diffs"
     );
     foreach my $log (@logfiles)
     {
         my $fname = $log;
         $fname =~ s!.*/([^/]+/log/[^/]+log)$!$1!;
         $fname =~ s!.*/([^/]+/[^/]+diffs)$!$1!;
-        local $/ = undef;
-        my $handle;
-        open($handle,$log);
-        my $contents = <$handle>;
-        close($handle);
+        my $contents = file_contents($log);
         push(@checklog,
-            "=========================== $fname ================\n",$contents);
+            "========================== $fname ================\n",$contents);
     }
 
     my $status = $? >>8;
 
-    main::writelog("test-decoding-check",\@checklog);
+    writelog("test-decoding-check",\@checklog);
     print "======== test-decoding check log ===========\n",@checklog
       if ($verbose > 1);
-    main::send_result("test-decoding-check",$status,\@checklog) if $status;
+    send_result("test-decoding-check",$status,\@checklog) if $status;
     {
         no warnings 'once';
-        $main::steps_completed .= " test-decoding-check";
+        $steps_completed .= " test-decoding-check";
     }
 
 }

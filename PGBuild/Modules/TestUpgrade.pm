@@ -2,16 +2,25 @@
 # Package Namespace is hardcoded. Modules must live in
 # PGBuild::Modules
 
+=comment
+
+Copyright (c) 2003-2017, Andrew Dunstan
+
+See accompanying License file for license details
+
+=cut
+
 package PGBuild::Modules::TestUpgrade;
 
 use PGBuild::Options;
 use PGBuild::SCM;
+use PGBuild::Utils qw(:DEFAULT $steps_completed $temp_installs);
 
 use File::Basename;
 
 use strict;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 my $hooks = {
 
@@ -51,7 +60,7 @@ sub setup
     bless($self, $class);
 
     # for each instance you create, do:
-    main::register_module_hooks($self,$hooks);
+    register_module_hooks($self,$hooks);
 
 }
 
@@ -59,9 +68,9 @@ sub check
 {
     my $self = shift;
 
-    return unless main::step_wanted('pg_upgrade-check');
+    return unless step_wanted('pg_upgrade-check');
 
-    print main::time_str(), "checking pg_upgrade\n" if	$verbose;
+    print time_str(), "checking pg_upgrade\n" if	$verbose;
 
     my $make = $self->{bfconf}->{make};
 
@@ -76,21 +85,28 @@ sub check
     if ($self->{bfconf}->{using_msvc})
     {
         chdir "$self->{pgsql}/src/tools/msvc";
-        @checklog = `perl vcregress.pl upgradecheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl upgradecheck");
         chdir "$self->{buildroot}/$self->{pgbranch}";
     }
     else
     {
         my $cmd;
+        my $instflags;
+        {
+            no warnings qw(once);
+            $instflags = $temp_installs >= 3 ? "NO_TEMP_INSTALL=yes" : "";
+        }
         if ($self->{pgbranch} eq 'HEAD' || $self->{pgbranch} ge 'REL9_5')
         {
-            $cmd = "cd $self->{pgsql}/src/bin/pg_upgrade && $make check";
+            $cmd =
+              "cd $self->{pgsql}/src/bin/pg_upgrade && $make $instflags check";
         }
         else
         {
-            $cmd = "cd $self->{pgsql}/contrib/pg_upgrade && $make check";
+            $cmd =
+              "cd $self->{pgsql}/contrib/pg_upgrade && $make $instflags check";
         }
-        @checklog = `$cmd 2>&1`;
+        @checklog = run_log($cmd);
     }
 
     my @logfiles = glob(
@@ -103,24 +119,20 @@ sub check
     foreach my $log (@logfiles)
     {
         my $fname = basename $log;
-        local $/ = undef;
-        my $handle;
-        open($handle,$log);
-        my $contents = <$handle>;
-        close($handle);
+        my $contents = file_contents($log);
         push(@checklog,
             "=========================== $fname ================\n",$contents);
     }
 
     my $status = $? >>8;
 
-    main::writelog("check-pg_upgrade",\@checklog);
+    writelog("check-pg_upgrade",\@checklog);
     print "======== pg_upgrade check log ===========\n",@checklog
       if ($verbose > 1);
-    main::send_result("pg_upgradeCheck",$status,\@checklog) if $status;
+    send_result("pg_upgradeCheck",$status,\@checklog) if $status;
     {
         no warnings 'once';
-        $main::steps_completed .= " pg_upgradeCheck";
+        $steps_completed .= " pg_upgradeCheck";
     }
 
 }

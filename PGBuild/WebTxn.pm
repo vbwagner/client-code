@@ -2,20 +2,20 @@ package PGBuild::WebTxn;
 
 =comment
 
-Copyright (c) 2003-2013, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
 
 Most of this code is imported from the older standalone script run_web_txn.pl
-which is now just a shell that calls the function below. It is now only 
+which is now just a shell that calls the function below. It is now only
 needed on older Msys installations (i.e. things running perl < 5.8).
 
-=cut 
+=cut
 
 use strict;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 use vars qw($changed_this_run $changed_since_success $branch $status $stage
   $animal $ts $log_data $confsum $target $verbose $secret);
@@ -61,6 +61,10 @@ sub run_web_txn
     eval "require JSON::PP; import JSON::PP;";
     $json_available = 1 unless $@;
 
+    # avoid using the Utils file handling here so we don't introduce an
+    # additional dependency. It might be OK to use but it might not,
+    # so don't risk it. :-)
+
     my $txfname = "$lrname/web-txn.data";
     my $txdhandle;
     $/=undef;
@@ -90,8 +94,8 @@ sub run_web_txn
     my $cts	= "'current_ts' => $current_ts,\n";
 
     # $2 here helps us to preserve the nice spacing from Data::Dumper
-    my $scriptline = "((.*)'script_version' => '(REL_)?\\d+(\\.\\d+)+',\n)";
-    $confsum =~ s/$scriptline/$1$2$webscriptversion$2$cts/;
+    my $scriptline = "((.*)'script_version' => '(REL_)?\\d+(\\.\\d+)*',?\n)";
+    $confsum =~ s/$scriptline/$2$webscriptversion$2$cts$1/;
     my $sconf = $confsum;
     $sconf =~ s/.*(\$Script_Config)/$1/ms;
     my $Script_Config;
@@ -146,7 +150,8 @@ sub run_web_txn
     $ua->agent("Postgres Build Farm Reporter");
     if (my $proxy = $ENV{BF_PROXY})
     {
-        $ua->proxy('http',$proxy);
+        my $targetURI = URI->new($target);
+        $ua->proxy($targetURI->scheme,$proxy);
     }
 
     my $request=HTTP::Request->new(POST => "$target/$sig");

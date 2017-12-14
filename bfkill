@@ -1,0 +1,9 @@
+#!/bin/sh
+ps axww|grep [/]postgres|awk '{print $1;}'|xargs kill
+sleep 2
+ps axww|grep [/]postgres|awk '{print $1;}'|xargs kill -9
+sleep 1
+ps axww|grep [/]prove|awk '{print $1;}'|xargs kill
+
+
+

@@ -2,11 +2,11 @@
 
 =comment
 
-Copyright (c) 2003-2013, Andrew Dunstan
+Copyright (c) 2003-2017, Andrew Dunstan
 
 See accompanying License file for license details
 
-=cut 
+=cut
 
 ###################################################
 #
@@ -39,7 +39,7 @@ See accompanying License file for license details
 
 use strict;
 
-use vars qw($VERSION); $VERSION = 'REL_4.18';
+use vars qw($VERSION); $VERSION = 'REL_5';
 
 use PGBuild::WebTxn;
 

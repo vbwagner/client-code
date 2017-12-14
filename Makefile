@@ -3,21 +3,22 @@
 
 # See accompanying License file for license details
 
-ALLPERLFILES = $(shell find . \( -name '*.pl' -o -name '*.pm' \) -print | sed 's!\./!!') build-farm.conf.sample
+ALLPERLFILES = $(shell find . -path ./sandbox -prune -o \( -name '*.pl' -o -name '*.pm' \) -print | sed 's!\./!!') build-farm.conf.sample
 
 # these are the explicitly selected perl files that will go in a 
 # release tarball
 PERLFILES = run_build.pl run_web_txn.pl run_branches.pl \
 	update_personality.pl setnotes.pl \
 	build-farm.conf.sample  \
-	PGBuild/SCM.pm PGBuild/Options.pm PGBuild/WebTxn.pm \
+	PGBuild/SCM.pm PGBuild/Options.pm PGBuild/WebTxn.pm PGBuild/Utils.pm \
 	PGBuild/Modules/Skeleton.pm \
 	PGBuild/Modules/TestUpgrade.pm \
 	PGBuild/Modules/FileTextArrayFDW.pm \
 	PGBuild/Modules/TestDecoding.pm \
 	PGBuild/Modules/TestCollateLinuxUTF8.pm \
 	PGBuild/Modules/TestSepgsql.pm \
-	PGBuild/Modules/TestUpgradeXversion.pm
+	PGBuild/Modules/TestUpgradeXversion.pm \
+	PGBuild/Modules/TestICU.pm
 
 OTHERFILES = License README
 
@@ -41,9 +42,17 @@ release:
 	@echo REL = $(CREL)
 	tar -z --xform="s,^,build-farm-$(REL)/,S" $(RELEASE_FILES) -cf releases/build-farm-$(CREL).tgz
 
+copyright:
+	./make_copyright.sh
+
+syncheck:
+	for f in $(ALLPERLFILES) ; do perl -cw $${f}; done;
+
 tidy:
 	perltidy -b -bl -nsfs -naws -l=80 -ole=unix $(ALLPERLFILES) 
 
 clean:
 	find . "(" -name '*.bak' -o -name '*.orig' -o -name '*~' ")" -type f -exec rm -f {} \;
 
+show:
+	@echo ALLPERLFILES: $(ALLPERLFILES)
