@@ -250,6 +250,9 @@ if ($from_source || $from_source_clean)
 }
 
 my @locales;
+# Check for version where multiple locales can be tested  is moved some
+# lines later, where version is known
+
 
 # sanity checks
 # several people have run into these
@@ -752,12 +755,11 @@ if (
 				|| defined($config_opts->{tcl}))
 		)
 	)
-  ) 
+  )
 {
 	make_pl_check();
 }
 
-make_perl_check() unless ($build_version lt " 9.5.0");
 
 make_certification_check() unless ($build_version lt " 9.5.0");
 
@@ -1029,8 +1031,8 @@ sub get_pg_version {
 		if (/AC_INIT\(\[\S+\],\s*\[([\d\.]+)(?:rc\d+|devel|beta\d+)?\],/) {
 			$ver= $1;
 			$ver = ' '.$ver if substr($ver,1,1) eq '.';
-			last; 
-		}	
+			last;
+		}
 	}
 	close $fh;
 	die "Couldn't determine PostgreSQL version from $filename " unless $ver;
@@ -1286,7 +1288,7 @@ sub initdb
                 $pg_regress = "$abspgsql/src/test/regress/pg_regress";
             }
             my $roles =
-              $branch ne 'HEAD' && $branch lt 'REL9_5'
+              $build_version lt ' 9.5.0'
               ?"buildfarm,dblink_regression_test"
               : "buildfarm";
             my $setauth = "--create-role $roles --config-auth";
@@ -1612,70 +1614,6 @@ sub make_certification_check
 
     $steps_completed .= " CertCheck"
 }
-sub make_perl_check
-{
-    return unless step_wanted('perl-check');
-    if ($using_msvc)
-    {
-        return unless $config_opts->{tap_tests};
-    }
-    else
-    {
-        return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
-    }
-
-    print time_str(),"running make perl check ...\n" if $verbose;
-    # fix path temporarily on msys
-    my $save_path = $ENV{PATH};
-    if ($^O eq 'msys')
-    {
-        my $perlpathdir = dirname($Config{perlpath});
-        $ENV{PATH} = "$perlpathdir:$ENV{PATH}";
-    }
-    my @checklog;
-    unless ($using_msvc)
-    {
-        @checklog = `cd $pgsql/src/test/perl && $make check 2>&1`;
-    }
-    else
-    {
-        chdir("$pgsql/src/tools/msvc");
-        @checklog = `perl vcregress.pl tapcheck 2>&1`;
-        chdir($branch_root);
-    }
-    my $status = $? >>8;
-    my @logs = (
-        glob("$pgsql/src/test/perl/tmp_check/log/*.log"),
-        glob("$pgsql/src/test/perl/tmp_check/log/regress_log_*"),
-        glob("$pgsql/src/test/perl/*/regression.diffs"),
-        glob("$pgsql/src/test/perl/*/*/regression.diffs")
-    );
-    foreach my $logfile (@logs)
-    {
-        next unless (-e $logfile);
-        push(@checklog,"\n\n================= $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
-    }
-	my $binloc = "$pgsql/tmp_install";
-    if ($status)
-    {
-        my @trace =
-          get_stack_trace("$binloc$installdir/bin");
-        push(@checklog,@trace);
-    }
-    writelog("perl-check",\@checklog);
-    print "======== make perl check log ===========\n",@checklog
-      if ($verbose > 1);
-    send_result("PerlCheck",$status,\@checklog) if $status;
-
-    $steps_completed .= " PerlCheck"
-}
 sub make_pl_check
 {
     return unless step_wanted('pl-check');
@@ -1830,7 +1768,7 @@ sub run_tap_test
 
     # fix path temporarily on msys
     my $save_path = $ENV{PATH};
-    if ($Config{osname} eq 'msys' && $branch ne 'HEAD' && $branch lt 'A')
+    if ($Config{osname} eq 'msys' && $build_version lt '10.0')
     {
         my $perlpathdir = dirname($Config{perlpath});
         $ENV{PATH} = "$perlpathdir:$ENV{PATH}";
@@ -2019,7 +1957,7 @@ sub make_contrib_check
     # get the log files and the regression diffs
     my @logs =
       glob("$pgsql/contrib/*/regression.diffs $pgsql/contrib/*/*/regression.diffs $pgsql/contrib/*/log/*.log $pgsql/contrib/*/tmp_check/log/*  $pgsql/tmp_install/log/*");
-    	
+
     foreach my $logfile (@logs)
     {
         push(@makeout,"\n\n================== $logfile ===================\n");
