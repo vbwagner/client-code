@@ -713,11 +713,10 @@ my $build_version=get_pg_version("$pgsql/configure.in");
 
 print time_str(),"Found version $build_version building commit ",
 	substr($scm->{headref},0,7),"\n" if $verbose;
-$build_version =~ s/^1(\d)\./(chr(ord('A')+$1))."."/e;
 print time_str(),"running configure ...\n" if $verbose;
 # Setup list of locales as soon as we would be able to check for
 # versions
-if ($build_version ge "8.4")
+if ($build_version ge " 8.4")
 {
 
     # non-C locales are not regression-safe before 8.4
@@ -758,14 +757,14 @@ if (
 	make_pl_check();
 }
 
-make_perl_check() unless ($build_version lt "9.5.0");
+make_perl_check() unless ($build_version lt " 9.5.0");
 
-make_certification_check() unless ($build_version lt "9.5.0");
+make_certification_check() unless ($build_version lt " 9.5.0");
 
-make_recovery_check() unless ($build_version lt "9.6.0");
+make_recovery_check() unless ($build_version lt " 9.6.0");
 
 make_testmodules()
-  if (!$using_msvc && $build_version ge "9.5.0" );
+  if (!$using_msvc && $build_version ge " 9.5.0" );
 
 make_doc() if (check_optional_step('build_docs'));
 
@@ -775,7 +774,7 @@ make_install();
 make_contrib_install() unless ($using_msvc);
 
 make_testmodules_install()
-  if (!$using_msvc && ($build_version ge "9.5.0"));
+  if (!$using_msvc && ($build_version ge " 9.5.0"));
 
 process_module_hooks('configure');
 
@@ -875,7 +874,7 @@ foreach my $locale (@locales)
     }
 
     if (step_wanted('testmodules-install-check')
-        &&($build_version ge "9.5.0"))
+        &&($build_version ge " 9.5.0"))
 	{
         print time_str(),"restarting db ($locale)...\n" if $verbose;
 
@@ -901,7 +900,7 @@ foreach my $locale (@locales)
 }
 
 # ecpg checks are not supported in 8.1 and earlier
-if ($build_version ge "8.2" && step_wanted('ecpg-check'))
+if ($build_version ge " 8.2" && step_wanted('ecpg-check'))
 
 {
     print time_str(),"running make ecpg check ...\n" if $verbose;
@@ -1016,6 +1015,11 @@ sub check_make
     return 'OK';
 }
 
+#
+# Extracts PostgreSQL version from configure.in
+# If version is below 10, prepends it with space to
+# make string comparation work
+#
 sub get_pg_version {
 	my $filename = shift;
 	my $fh;
@@ -1024,6 +1028,7 @@ sub get_pg_version {
 	while (<$fh>) {
 		if (/AC_INIT\(\[\S+\],\s*\[([\d\.]+)(?:rc\d+|devel|beta\d+)?\],/) {
 			$ver= $1;
+			$ver = ' '.$ver if substr($ver,1,1) eq '.';
 			last; 
 		}	
 	}
@@ -1043,7 +1048,7 @@ sub make
     {
         my $make_cmd = $make;
         $make_cmd = "$make -j $make_jobs"
-          if ($make_jobs > 1 && ($build_version ge "9.1.0"));
+          if ($make_jobs > 1 && ($build_version ge " 9.1.0"));
         @makeout = run_log("cd $pgsql && $make_cmd");
     }
     else
@@ -1153,7 +1158,7 @@ sub make_contrib
 
     my $make_cmd = $make;
     $make_cmd = "$make -j $make_jobs"
-      if ($make_jobs > 1 && ($build_version ge "9.1,0"));
+      if ($make_jobs > 1 && ($build_version ge " 9.1,0"));
     my @makeout = run_log("cd $pgsql/contrib && $make_cmd");
     my $status = $? >>8;
     writelog('make-contrib',\@makeout);
@@ -1818,7 +1823,7 @@ sub run_tap_test
     my $is_install_check = shift;
 
     # tests only came in with 9.4
-    return unless ($build_version ge "9.4.0");
+    return unless ($build_version ge " 9.4.0");
     my $target = $is_install_check ? "installcheck" : "check";
 
     return unless step_wanted("$testname-$target");
@@ -1886,7 +1891,7 @@ sub run_bin_tests
     return unless step_wanted('bin-check');
 
     # tests only came in with 9.4
-    return unless ($branch eq 'HEAD' or $build_version ge '9.4.0');
+    return unless ($branch eq 'HEAD' or $build_version ge ' 9.4.0');
 
     # don't run unless the tests have been enabled
     if ($using_msvc)
@@ -1912,7 +1917,7 @@ sub run_misc_tests
     return unless step_wanted('misc-check');
 
     # tests only came in with 9.4
-    return unless ($branch eq 'HEAD' or $build_version ge '9.4');
+    return unless ($branch eq 'HEAD' or $build_version ge ' 9.4.0');
 
     # don't run unless the tests have been enabled
     if ($using_msvc)
