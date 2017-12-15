@@ -1430,6 +1430,19 @@ sub make_contrib_install_check
         chdir "$pgsql/src/tools/msvc";
         @checklog = run_log("perl vcregress.pl contribcheck");
         chdir $branch_root;
+		#
+		# Run tap tests on contrib modules
+		#
+		if ($config_opts->{tap_tests} && $build_version ge " 9.5.0") {
+			for my $module (glob("$pgsql/contrib/*")) {
+
+				if (-d "$module/t") {
+					$module =~ m!(^[/]+)$!;
+					push @checklog,"---- run taptests for contrib module $1---";
+					run_tap_test($module,$1,1);
+				}
+			}
+		}
     }
     my $status = $? >>8;
     my @logs = glob("$pgsql/contrib/*/regression.diffs $pgsql/contrib/*/*/regression.diffs");
@@ -1506,12 +1519,12 @@ sub make_recovery_check
     my @checklog;
     unless ($using_msvc)
     {
-        @checklog = `cd $pgsql/src/test/recovery && $make check 2>&1`;
+        @checklog = run_log("cd $pgsql/src/test/recovery && $make check");
     }
     else
     {
         chdir("$pgsql/src/tools/msvc");
-        @checklog = `perl vcregress.pl recoverycheck 2>&1`;
+        @checklog = run_log("perl vcregress.pl recoverycheck");
         chdir($branch_root);
     }
     my $status = $? >>8;
@@ -1553,8 +1566,8 @@ sub make_certification_check
 	return unless -d "$pgsql/src/test/certification";
     if ($using_msvc)
     {
-        return;
-		#return unless $config_opts->{tap_tests};
+		return unless $config_opts->{tap_tests};
+		return unless $config_opts->{svt5};
     }
     else
     {
@@ -1573,13 +1586,13 @@ sub make_certification_check
     my @checklog;
     unless ($using_msvc)
     {
-        @checklog = `cd $pgsql/src/test/certification && $make check 2>&1`;
+        @checklog = run_log("cd $pgsql/src/test/certification && $make check");
+
     }
     else
     {
-        chdir("$pgsql/src/tools/msvc");
-        @checklog = `perl vcregress.pl tapcheck 2>&1`;
-        chdir($branch_root);
+		chdir("$pgsql/src/tools/msvc");
+		@checklog = run_log("perl vcregress.pl taptests src/test/certification");
     }
     my $status = $? >>8;
     my @logs = (
@@ -1855,7 +1868,7 @@ sub run_misc_tests
     return unless step_wanted('misc-check');
 
     # tests only came in with 9.4
-    return unless ($branch eq 'HEAD' or $build_version ge ' 9.4.0');
+    return unless ( $build_version ge ' 9.4.0');
 
     # don't run unless the tests have been enabled
     if ($using_msvc)
@@ -1943,12 +1956,12 @@ sub make_contrib_check
     my @makeout;
     unless ($using_msvc)
     {
-        @makeout =`cd $pgsql/contrib && $make NO_LOCALE=1 check 2>&1`;
+        @makeout =run_log("cd $pgsql/contrib && $make NO_LOCALE=1 check");
     }
     else
     {
         chdir "$pgsql/src/tools/msvc";
-        @makeout = `perl vcregress.pl contribcheck 2>&1`;
+        @makeout = run_log("perl vcregress.pl contribcheck 2>&1");
         chdir $branch_root;
     }
 
