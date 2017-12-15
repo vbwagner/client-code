@@ -1437,7 +1437,7 @@ sub make_contrib_install_check
 			for my $module (glob("$pgsql/contrib/*")) {
 
 				if (-d "$module/t") {
-					$module =~ m!(^[/]+)$!;
+					$module =~ m!([^/]+)$!;
 					push @checklog,"---- run taptests for contrib module $1---";
 					run_tap_test($module,$1,1);
 				}
