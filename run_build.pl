@@ -763,6 +763,8 @@ if (
 
 make_certification_check() unless ($build_version lt " 9.5.0");
 
+make_64_bit_xid_check() if -d "src/test/xid-64";
+
 make_recovery_check() unless ($build_version lt " 9.6.0");
 
 make_testmodules()
@@ -1593,6 +1595,71 @@ sub make_certification_check
     {
 		chdir("$pgsql/src/tools/msvc");
 		@checklog = run_log("perl vcregress.pl taptests src/test/certification");
+    }
+    my $status = $? >>8;
+    my @logs = (
+	    glob("$pgsql/src/test/certification/tmp_check/log/regress_log_*"),
+	    glob("$pgsql/src/test/certification/tmp_check/log/*.log"),
+        glob("$pgsql/src/test/certification/*/regression.diffs"),
+        glob("$pgsql/src/test/certification/*/*/regression.diffs")
+    );
+    foreach my $logfile (@logs)
+    {
+        next unless (-e $logfile);
+        push(@checklog,"\n\n================= $logfile ===================\n");
+        my $handle;
+        open($handle,$logfile);
+        while(<$handle>)
+        {
+            push(@checklog,$_);
+        }
+        close($handle);
+    }
+	my $binloc = "$pgsql/tmp_install";
+    if ($status)
+    {
+        my @trace =
+          get_stack_trace("$binloc$installdir/bin");
+        push(@checklog,@trace);
+    }
+    writelog("cert-check",\@checklog);
+    print "======== make certification check log ===========\n",@checklog
+      if ($verbose > 1);
+    send_result("CertCheck",$status,\@checklog) if $status;
+
+    $steps_completed .= " CertCheck"
+}
+sub make_64_bit_xid_check
+{
+    return unless step_wanted('64-bit-xid-check');
+	return unless -d "$pgsql/src/test/xid-64";
+    if ($using_msvc)
+    {
+		return unless $config_opts->{tap_tests};
+    }
+    else
+    {
+        return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
+    }
+
+    print time_str(),"running make -C src/test/xid-64 check ...\n" if $verbose;
+    # fix path temporarily on msys
+    my $save_path = $ENV{PATH};
+    if ($^O eq 'msys')
+    {
+        my $perlpathdir = dirname($Config{perlpath});
+        $ENV{PATH} = "$perlpathdir:$ENV{PATH}";
+    }
+    my @checklog;
+    unless ($using_msvc)
+    {
+        @checklog = run_log("cd $pgsql/src/test/xid-64 && $make check");
+
+    }
+    else
+    {
+		chdir("$pgsql/src/tools/msvc");
+		@checklog = run_log("perl vcregress.pl taptests src/test/xid-64");
     }
     my $status = $? >>8;
     my @logs = (
