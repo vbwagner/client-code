@@ -464,7 +464,9 @@ END
         && !$from_source)
     {
         # remove work tree on success, if configured
-        $scm->rm_worktree();
+		eval {
+			$scm->rm_worktree();
+		};
     }
 
     if ( $have_lock && -d "$pgsql")
@@ -762,10 +764,6 @@ if (
 
 
 make_certification_check() unless ($build_version lt " 9.5.0");
-
-make_64_bit_xid_check() if -d "src/test/xid-64";
-
-make_recovery_check() unless ($build_version lt " 9.6.0");
 
 make_testmodules()
   if (!$using_msvc && $build_version ge " 9.5.0" );
@@ -1506,62 +1504,6 @@ sub make_testmodules_install_check
     $steps_completed .= " TestModulesCheck-$locale";
 }
 
-sub make_recovery_check
-{
-    return unless step_wanted('recovery-check');
-    if ($using_msvc)
-    {
-        return unless $config_opts->{tap_tests};
-    }
-    else
-    {
-        return unless grep {$_ eq '--enable-tap-tests' } @$config_opts;
-    }
-    print time_str(),"running recovery check ...\n" if $verbose;
-    my @checklog;
-    unless ($using_msvc)
-    {
-        @checklog = run_log("cd $pgsql/src/test/recovery && $make check");
-    }
-    else
-    {
-        chdir("$pgsql/src/tools/msvc");
-        @checklog = run_log("perl vcregress.pl recoverycheck");
-        chdir($branch_root);
-    }
-    my $status = $? >>8;
-    my @logs = (
-        glob("$pgsql/src/test/recovery/tmp_check/log/*.log"),
-        glob("$pgsql/src/test/recovery/tmp_check/log/regress_log_*"),
-        glob("$pgsql/src/test/recovery/*/regression.diffs"),
-        glob("$pgsql/src/test/recovery/*/*/regression.diffs")
-    );
-    foreach my $logfile (@logs)
-    {
-        next unless (-e $logfile);
-        push(@checklog,"\n\n================= $logfile ===================\n");
-        my $handle;
-        open($handle,$logfile);
-        while(<$handle>)
-        {
-            push(@checklog,$_);
-        }
-        close($handle);
-    }
-	my $binloc = "$pgsql/tmp_install";
-    if ($status)
-    {
-        my @trace =
-          get_stack_trace("$binloc$installdir/bin");
-        push(@checklog,@trace);
-    }
-    writelog("recovery-check",\@checklog);
-    print "======== make recovery check log ===========\n",@checklog
-      if ($verbose > 1);
-    send_result("RecoveryCheck",$status,\@checklog) if $status;
-
-    $steps_completed .= " RecoveryCheck"
-}
 sub make_certification_check
 {
     return unless step_wanted('cert-check');
@@ -1663,10 +1605,8 @@ sub make_64_bit_xid_check
     }
     my $status = $? >>8;
     my @logs = (
-	    glob("$pgsql/src/test/certification/tmp_check/log/regress_log_*"),
-	    glob("$pgsql/src/test/certification/tmp_check/log/*.log"),
-        glob("$pgsql/src/test/certification/*/regression.diffs"),
-        glob("$pgsql/src/test/certification/*/*/regression.diffs")
+	    glob("$pgsql/src/test/64-xid/tmp_check/log/regress_log_*"),
+	    glob("$pgsql/src/test/64-xid/tmp_check/log/*.log"),
     );
     foreach my $logfile (@logs)
     {
@@ -1687,7 +1627,7 @@ sub make_64_bit_xid_check
           get_stack_trace("$binloc$installdir/bin");
         push(@checklog,@trace);
     }
-    writelog("cert-check",\@checklog);
+    writelog("64bit-xid-check",\@checklog);
     print "======== make certification check log ===========\n",@checklog
       if ($verbose > 1);
     send_result("CertCheck",$status,\@checklog) if $status;
@@ -1949,7 +1889,7 @@ sub run_misc_tests
 
     print time_str(),"running make misc checks ...\n" if $verbose;
 
-    foreach my $test (qw(recovery subscription authentication))
+    foreach my $test (qw(recovery subscription authentication 64-xid))
     {
         next unless -d "$pgsql/src/test/$test/t";
         run_tap_test("$pgsql/src/test/$test", $test, undef);
