@@ -449,7 +449,7 @@ my $waiter_pid;
 # cleanup handler for all exits
 END
 {
-    return if (defined($waiter_pid) && $waiter_pid == $$);
+    return if (defined($main_pid) && $main_pid != $$);
 
     kill('TERM', $waiter_pid) if $waiter_pid;
 
