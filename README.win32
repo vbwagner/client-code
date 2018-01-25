@@ -1,0 +1,60 @@
+Setting up Windows buildfarm member for MSVC
+============================================
+
+1. Install Microsoft Visual studio, desired version (2013 and up)
+2. Install ActiveState perl 5.22 or above 
+   both 32-bit (in c:\Perl) and 64-bit (in c:\Perl64)
+3. Install IPC::Run into both perls using ppm install
+4. Install Python 2.7 both 32-bit and 64-bit into C:\Python27x86 and
+   C:\Python27x64 respectively.
+5. Install msys (minimal install)
+6. Install Git
+8. Install 7zip
+9. Check out pgwininstall module from https://github.com/postgrespro/pgwininstall.git
+9. Set SDK environment variable appropriately to your compiler and 
+  run run.cmd 1 to build other dependencies for postgres.
+  It will also install neccessary mingw64 compontents such as flex and
+  bison.
+  Do it twice setting ARCH environment variable to x86 and x64
+  respectively. You should get two archives deps-MSVCxxxx-x64.zip and
+    deps-MSVCxxxx-x86.zip
+
+Now you can set up pgfarm build direcrory
+10. Make directory c:\pgfarm. with subcdirectores 
+    deps_x86, deps_x64 ,build_x86, build_x64
+11. Unpack archives, obtained on step 9 into appropiate deps directory
+12. mkdir dlls subdirecrory in each deps directory and copy there all
+    dlls, found in unpacked archive.
+Write configuraton files for buildfarm scripts. There are two things
+    to pay attention to:
+13. Configure proper path:
+    1. run vcvars.all for appropriate architecture.
+	2. Add proper perl bin directory into beginning of path
+	3. Add c:\depth_%ARCH%\dlls and c:\msys64\usr\bin into end of your
+	path
+    4. Dump this environment and convert it into format, suitable for
+	buildfarm.conf
+	you can use command 
+	perl -mData::Dumper -e "print Data::Dumper->Dump([\%ENV]);"
+	but don't forget that Perl mangles PATH, and you'll need to
+	demangle it back
+14. Configure config hash in buildfarm conf. Point various additional
+    library options to corresponding subdirectores in the
+	\pgfarm\deps_%ARCH%, and perl and python options to appropriate
+	installations. Set tap_tests to 1.
+
+15. Start command shell with only perl with appropriate archiecture
+    added to PATH and execute perl run_build.pl 
+	as described in Pgbuildfarm howto. Now you can run two buildfarm
+	critters on this machine - one for 32-bit windows build and one for
+	64-bit. Really, you can do more, and have several versionso of MSVC
+	installed simultaneously.
+
+
+
+
+
+
+
+
+
