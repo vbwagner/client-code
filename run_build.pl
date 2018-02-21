@@ -1975,15 +1975,22 @@ sub collect_extra_base_config {
 					my ($opt,$value);
 					$opt = $1;
 					$value = $2;
-					if (exists $addopts{$opt}) {
-						if (substr($value,0,1) eq "'") {
-							$addopts{$opt} = substr($addopts{$opt},0,-1).", ".substr($value,1);
-						} else {
-						  $addopts{$opt} .= ", ".$value;
-						}
-					} else {
-					    $addopts{$opt} = $value;
+					if (substr($value,0,1) eq "'") {
+						$value = substr($value,1,-1);
 					}
+					my @val=split(/,\s+/,$value);
+					if (exists $addopts{$opt}) {
+						$addopts{$opt} = {$addopts{$opt} => 1}
+							if !  ref($addopts{$opt});
+						for my $v (@val) {
+							$addopts{$opt}->{$v} = 1
+						}
+					} elsif (@val >1) {
+						$addopts{$opt}={ map {$_ => 1} @val }	
+					} else {
+						$addopts{$opt} = $val[0]
+					}
+
 				}
 			}
 		}
@@ -1995,6 +2002,12 @@ sub collect_extra_base_config {
 		my $f;
 		open $f, ">>",$config;
 		while (my ($opt,$value) = each %addopts) {
+			if (ref($value)) {
+				$value = "'".join(", ",keys(%$value))."'"
+			} else {
+				$value = "'".$value."'" unless $value eq 'on' || $value eq 'off' ||
+				$value =~ /^\d+$/;
+			}
 			print $f " $opt = $value\n";
 			print time_str(),"    $opt = $value\n" if $verbose;
 
