@@ -6,6 +6,7 @@ if [ "$1" = "--host" ]; then
 else	
 	case `uname -s` in
 	Linux)
+		PATH=/usr/bin:/usr/sbin:/bin:/sbin
 		gateway=`ip route show|awk '$1=="default" {print $3;}'`
 		;;
 	*) 
