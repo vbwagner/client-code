@@ -2003,7 +2003,16 @@ sub collect_extra_base_config {
 		open $f, ">>",$config;
 		while (my ($opt,$value) = each %addopts) {
 			if (ref($value)) {
-				$value = "'".join(", ",keys(%$value))."'"
+				my $pathman=undef;
+				if ($opt eq 'shared_preload_libraries' and 
+				   exists($value->{'pg_pathman'})) {
+					delete $value->{'pg_pathman'};
+					$pathman=1;
+				}
+				$value = join(", ",keys(%$value));
+				$value.=", pg_pathman" if $pathman and $value;
+				$value="pg_pathman" if $pathman and not $value;
+				$value="'".$value."'";
 			} else {
 				$value = "'".$value."'" unless $value eq 'on' || $value eq 'off' ||
 				$value =~ /^\d+$/;
