@@ -1439,6 +1439,7 @@ sub make_contrib_install_check
 				if (-d "$module/t") {
 					$module =~ m!([^/]+)$!;
 					next if $1 eq "bloom";
+					next if $1 eq "mmts" && $build_version lt "10.2";
 					push @checklog,"---- run taptests for contrib module $1---";
 					run_tap_test($module,$1,1);
 				}
