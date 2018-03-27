@@ -714,7 +714,7 @@ $temp_installs = 0;
 
 # Determine version
 
-my $build_version=get_pg_version("$pgsql/configure.in");
+my $build_version=get_pg_version(($use_vpath?"pgsql":$pgsql). "/configure.in");
 
 print time_str(),"Found version $build_version building commit ",
 	substr($scm->{headref},0,7),"\n" if $verbose;
@@ -1026,7 +1026,7 @@ sub get_pg_version {
 	my $filename = shift;
 	my $fh;
 	my $ver;
-	open ($fh,"<",$filename) || die $!;
+	open ($fh,"<",$filename) || die "$filename:$!";
 	while (<$fh>) {
 		if (/AC_INIT\(\[\S+\],\s*\[([\d\.]+)(?:rc\d+|devel|beta\d+)?\],/) {
 			$ver= $1;
