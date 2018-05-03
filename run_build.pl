@@ -1827,11 +1827,27 @@ sub run_misc_tests
 
     print time_str(),"running make misc checks ...\n" if $verbose;
 
-    foreach my $test (qw(recovery subscription authentication xid-64))
+	my @misc_tests = qw(recovery subscription authentication xid-64);
+
+	# Find out which tests for default_collation showld be run if any
+	if ($build_version  ge '10.0') {
+		# Default collation provider is libc
+		my $subdir ='libc';
+		# If build with icu support, run test for ICU collation provider
+		if ($using_msvc) {
+			$subdir = 'icu' if $config_opts->{icu};
+		} else {
+			$subdir = 'icu' if grep {$_  eq '--with-icu'} @$config_opts;
+		}
+		push @misc_tests, "default_collation/$subdir";
+	}
+
+    foreach my $test (@misc_tests)
     {
         next unless -d "$pgsql/src/test/$test/t";
-	print time_str()," -- $test...\n" if $verbose;
-        run_tap_test("$pgsql/src/test/$test", $test, undef);
+		my $testname=(split '/',$test)[0];
+		print time_str()," -- $testname...\n" if $verbose;
+        run_tap_test("$pgsql/src/test/$test", $testname, undef);
     }
 }
 
@@ -1963,7 +1979,8 @@ sub collect_extra_base_config {
 		open $f,"<","$module/GNUmakefile" or
 			open $f,"<","$module/Makefile" or
 				next MODULE;
-		my %vars=(top_srcdir=>$pgsql);
+		my %vars=(top_srcdir=>$use_vpath?"pgsql":$pgsql,
+			top_builddir=>$pgsql);
 		while (<$f>) {
 			$vars{$1}=$2 if /^\s*(\w+)\s*=\s*(.*)$/	;
 		}
