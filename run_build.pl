@@ -1433,7 +1433,7 @@ sub make_contrib_install_check
 		#
 		# Run tap tests on contrib modules
 		#
-		if ($config_opts->{tap_tests} && $build_version ge " 9.5.0") {
+		if (($?>>8)>0 && $config_opts->{tap_tests} && $build_version ge " 9.5.0") {
 			for my $module (glob("$pgsql/contrib/*")) {
 				if (-d "$module/t") {
 					$module =~ m!([^/]+)$!;
