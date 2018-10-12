@@ -1827,7 +1827,7 @@ sub run_misc_tests
 
     print time_str(),"running make misc checks ...\n" if $verbose;
 
-	my @misc_tests = qw(recovery subscription authentication xid-64 prioritization);
+	my @misc_tests = qw(recovery subscription authentication xid-64);
 
 	# Find out which tests for default_collation showld be run if any
 	if ($build_version  ge '10.0') {
