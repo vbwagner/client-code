@@ -74,7 +74,7 @@ sub run_log
     }
     else
     {
-        my $ucmd = "{ $command; echo \$? > $stfile; }";
+        my $ucmd = "{ulimit -c unlimited; $command; echo \$? > $stfile; }";
         my $getstat = "read st < $stfile; exit \$st";
   
         if ($ENV{BF_LOG_TIME} && -x "/usr/bin/ts")
