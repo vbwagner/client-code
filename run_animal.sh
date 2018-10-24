@@ -14,7 +14,7 @@ RBARGS="--run-all"
 CLARGS=""
 for a ; do
 	case "$a" in
-	--host)
+	--host|--only)
 		CLARGS="$CLARGS $a"
 		;;
 	*)

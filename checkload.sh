@@ -1,6 +1,14 @@
 #!/bin/sh
 # Gets info about host's load from getload script running on default
 # gateway via http
+# If --host is passed, checks for load of localhost. (Use that when
+# running some jobs on host where several VMs are also running and
+# compete for CPU).
+# if --only is passed, just exits successfully. Use this for hardware
+# nodes where there is no other load.
+if [ "$1" = "--only" ]; then
+	exit 0
+fi
 if [ "$1" = "--host" ]; then
 	gateway=localhost
 else	
