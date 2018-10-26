@@ -3,10 +3,12 @@
 
 use strict;
 use warnings;
-use PGBuild::Options;
 use LWP::Simple;
 use File::Basename;
+use File::Spec;
 use File::Path qw(rmtree);
+use lib File::Spec->rel2abs(dirname(__FILE__));
+use PGBuild::Options;
 # process the command line
 PGBuild::Options::fetch_options();
 # no non-option args allowed here
