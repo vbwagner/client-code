@@ -165,13 +165,13 @@ my (
     $make, $optional_steps, $use_vpath,
     $tar_log_cmd, $using_msvc, $extra_config,
     $make_jobs, $core_file_glob, $ccache_failure_remove,
-    $wait_timeout, $use_accache
+    $wait_timeout, $use_accache, $fail_on_warning
   )
   =@PGBuild::conf{
     qw(build_root target animal aux_path trigger_exclude
       trigger_include secret keep_error_builds force_every make optional_steps
       use_vpath tar_log_cmd using_msvc extra_config make_jobs core_file_glob
-      ccache_failure_remove wait_timeout use_accache)
+      ccache_failure_remove wait_timeout use_accache fail_on_warning)
   };
 
 # default use_accache to on
@@ -2406,6 +2406,14 @@ sub configure
         @config = file_lines("$pgsql/config.log");
         writelog('config',\@config);
     }
+	if ($fail_on_warning) {
+		local $/ = undef;
+		open my $f,"+<","$pgsql/src/Makefile.global" or die "Error patching Makefile.global";
+		local $_ = <$f>;
+		s/^CFLAGS = (.*)$/CFLAGS = $1 -Werror/m;
+		seek $f,0,0;
+		print $f $_;
+	}
 
     if ($status)
     {
@@ -2415,7 +2423,7 @@ sub configure
 
         send_result('Configure',$status,\@confout);
     }
-
+	
     $steps_completed .= " Configure";
 }
 

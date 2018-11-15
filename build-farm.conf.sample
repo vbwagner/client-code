@@ -52,7 +52,10 @@ my $branch;
     make_jobs => undef, # >1 for parallel "make" and "make check" steps
     tar_log_cmd => undef, # default is "tar -z -cf runlogs.tgz *.log"
     # replacement must have the same effect
-
+	# Add -Werror to CFLAGS in Makefile.global after configure
+	# It cannot be done by passing CFLAGS to configure via env, because
+	# most configure tests would fail with -Werror
+	fail_on_warning => undef,
     # max time in seconds allowed for a single branch run
     # undef/0 means unlimited
     wait_timeout => undef,
