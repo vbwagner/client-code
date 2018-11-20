@@ -38,8 +38,14 @@ See accompanying License file for license details
 ######################################################
 
 use strict;
+use warnings;
 
-use vars qw($VERSION); $VERSION = 'REL_5';
+use vars qw($VERSION); $VERSION = 'REL_8';
+
+use File::Spec;
+use File::Basename;
+
+BEGIN { use lib File::Spec->rel2abs(dirname(__FILE__)); }
 
 use PGBuild::WebTxn;
 
@@ -49,10 +55,10 @@ my $res = PGBuild::WebTxn::run_web_txn($lrname);
 
 if ($res)
 {
-    exit 0;
+	exit 0;
 }
 else
 {
-    exit 1;
+	exit 1;
 }
 

@@ -9,7 +9,7 @@ See accompanying License file for license details
 
 =cut 
 
-package PGBuild;
+package PGBuild;    ## no critic (RequireFilenameMatchesPackage)
 
 use strict;
 
@@ -17,54 +17,77 @@ use warnings FATAL => 'qw';
 
 use vars qw(%conf);
 
-# use vars qw($VERSION); $VERSION = 'REL_5';
+# use vars qw($VERSION); $VERSION = 'REL_8';
 
 my $branch;
 {
-    no warnings qw(once);
-    $branch = $main::branch;
+	no warnings qw(once);
+	$branch = $main::branch;
 }
 
-%conf =(
+# useful for making settings relative to the config file location
+# all the clients should have used these two standard packages
+my $confdir = File::Spec->rel2abs(File::Basename::dirname(__FILE__));
+
+# to force from-source in the directory where this config file is located,
+# uncomment the line below. See also buildroot below
+# $PGBuild::Options::from_source = $confdir;
+
+%conf = (
 
     # identity
     animal => "CHANGEME",
     secret => "CHANGEME",
 
     # source code
-    scm => 'git', # or 'cvs'
-    git_keep_mirror => 1,  # manage a git mirror in the build root
-    git_ignore_mirror_failure => 1, # ignore failures in fetching to mirror
-    git_gc_hours => 7 * 24, # garbage collect once a week, 0/undef to disable
+    scm                       => 'git',  # or 'cvs'
+    git_keep_mirror           => 1,      # manage a git mirror in the build root
+    git_ignore_mirror_failure => 1,      # ignore failures in fetching to mirror
+    git_gc_hours => 7 * 24,    # garbage collect once a week, 0/undef to disable
 
     # use symlinked git repo from non-HEAD branches,
     # like git-new-workdir does
-    git_use_workdirs => 1,
+    git_use_workdirs => 0,
 
-    scmrepo => undef, # default is community repo for either type
-    scm_url => undef, # webref for diffs on server - use default for community
-    # git_reference => undef, # for --reference on git repo
-    # cvsmethod => 'update', # or 'export'
-    use_git_cvsserver => undef, # or 'true' if repo is a git cvsserver
+    scmrepo => 'git@git.l.postgrespro.ru:pgpro-dev/postgrespro.git',  # default is community repo for either type
+    scm_url => undef,   # webref for diffs on server - use default for community
+                        # git_reference => undef, # for --reference on git repo
+                        # cvsmethod => 'update', # or 'export'
+    use_git_cvsserver => undef,    # or 'true' if repo is a git cvsserver
 
     # external commands and control
-    make => 'make', # or gmake if required. can include path if necessary.
-    make_jobs => undef, # >1 for parallel "make" and "make check" steps
+    make      => 'make',  # or gmake if required. can include path if necessary.
+    make_jobs => undef,   # >1 for parallel "make" and "make check" steps
     tar_log_cmd => undef, # default is "tar -z -cf runlogs.tgz *.log"
-    # replacement must have the same effect
-	# Add -Werror to CFLAGS in Makefile.global after configure
-	# It cannot be done by passing CFLAGS to configure via env, because
-	# most configure tests would fail with -Werror
-	fail_on_warning => undef,
+                          # replacement must have the same effect
+    # Add -Werror to CFLAGS in Makefile.global after configure
+    # It cannot be done by passing CFLAGS to configure via env, because
+    # most configure tests would fail with -Werror
+    fail_on_warning => undef,
     # max time in seconds allowed for a single branch run
     # undef/0 means unlimited
-    wait_timeout => undef,
+    wait_timeout => 7200,
+
+    # if true run installcheck-parallel instead of installcheck
+    use_installcheck_parallel => undef,
 
     # where and how to build
     # must be absolute, can be either Unix or Windows style for MSVC
     # undef means default, buildroot dir in script directory
-    build_root =>   undef, #  or '/path/to/buildroot',
-    use_vpath => undef, # set true to do vpath builds
+    # "$confdir/buildroot" means buildroot in the config file's directory,
+    # which is useful for auto from-source setups
+    build_root => '/home/buildfarm/build-farm',    #  or '/path/to/buildroot',
+    use_vpath  => undef,    # set true to do vpath builds
+
+    # valgrind settings - default is don't use valgrind
+    # It will use the .supp file in the source code so that's not in the
+    # options here.
+    use_valgrind     => undef,
+    valgrind_options => join(
+        ' ', qw{--quiet --trace-children=yes
+          --track-origins=yes --read-var-info=yes --num-callers=20
+          --leak-check=no --gen-suppressions=all   --error-limit=no}
+    ),
 
     # path to directory with auxiliary web script
     # if relative, the must be relative to buildroot/branch
@@ -72,7 +95,7 @@ my $branch;
     # aux_path => "../..",
 
     keep_error_builds => 0,
-    core_file_glob => "core*",   # Linux style, use "*.core" for BSD
+    core_file_glob    => "core*",    # Linux style, use "*.core" for BSD
 
     # where to report status
     target => "https://buildfarm.postgresql.org/cgi-bin/pgstatus.pl",
@@ -98,7 +121,6 @@ my $branch;
     force_every => {
 
         # HEAD => 48,
-        # REL8_3_STABLE => 72,
         # default => 168,
     },
 
@@ -107,8 +129,8 @@ my $branch;
 
     alerts => {
 
-        #HEAD          => { alert_after => 72,  alert_every => 24 },
-        # REL8_1_STABLE => { alert_after => 240, alert_every => 48 },
+        # HEAD          => { alert_after => 72,  alert_every => 24 },
+        # REL_10_STABLE => { alert_after => 240, alert_every => 48 },
     },
 
     # include / exclude patterns for files that trigger a build
@@ -124,11 +146,11 @@ my $branch;
     # these lists contain addresses to be notified
     # must be complete email addresses, as the email is sent from the server
 
-    mail_events =>{
-        all => [], # unconditional
-        fail => [], # if this build fails
-        change => [], # if this build causes a state change
-        green => [], # if this build causes a state change to/from OK
+    mail_events => {
+        all    => [],    # unconditional
+        fail   => [],    # if this build fails
+        change => [],    # if this build causes a state change
+        green  => [],    # if this build causes a state change to/from OK
     },
 
     # if this flag is set and ccache is used, an unsuccessful run will result
@@ -152,7 +174,7 @@ my $branch;
     # these settings will be seen by all the processes, including the
     # configure process.
 
-    build_env =>{
+    build_env => {
 
         # use a dedicated cache for the build farm. this should give us
         # very high hit rates and slightly faster cache searching.
@@ -175,14 +197,17 @@ my $branch;
         # default is 120
         # PGCTLTIMEOUT => '120',
 
+        # run extra TAP tests if listed here
+        # These are the ones omitted without the setting
+        # PG_TEST_EXTRA => "ssl ldap kerberos",
     },
 
     # env settings to pass to configure. These settings will only be seen by
     # configure.
-    config_env =>{
+    config_env => {
 
         # comment out if not using ccache
-        CC => 'ccache gcc',
+        # CC => 'ccache gcc',
 
         # In the rare event that you need to tell configure where the prove
         # program lives instead of letting it work it out you do it here.
@@ -199,29 +224,37 @@ my $branch;
 
     # see below for MSVC config
 
-    config_opts =>[
-        qw(
-          --enable-cassert
-          --enable-debug
-          --enable-nls
-          --with-perl
-          --with-python
-          --with-tcl
-          --with-gssapi
-          --with-openssl
-          --with-ldap
-          --with-libxml
-          --with-libxslt
-          )
+    config_opts => [
+       
+                                      '--enable-debug',
+                                      '--enable-cassert',	
+                                      '--enable-nls',
+                                      '--with-perl',
+                                      '--with-python',
+                                      '--with-tcl',
+                                      '--with-gssapi',
+                                      '--with-openssl',
+                                      '--with-libxml',
+                                      '--with-libxslt',
+                                      '--with-ldap',
+                                      '--with-icu',
+# For PGPRO EE
+                                      '--with-zstd',
+                                      '--enable-tap-tests',
+				      '--with-rsocket',
+# For PGPRO certified
+				      '--enable-svt5',
+# Jessie-specific
+                                      '--with-tclconfig=/usr/lib/x86_64-linux-gnu/tcl8.6',
     ],
 
     # per-branch contents of extra config for check stages.
     # each branch has an array of setting lines (no \n required)
     # a DEFAULT entry is used for all branches, before any
     # branch-specific settings.
-    extra_config =>{
+    extra_config => {
         DEFAULT => [
-            q(log_line_prefix = '%m [%p:%l] '),
+            q(log_line_prefix = '%m [%p:%l] %q%a '),
             "log_connections = 'true'",
             "log_disconnections = 'true'",
             "log_statement = 'all'",
@@ -229,18 +262,18 @@ my $branch;
         ],
     },
 
-    optional_steps =>{
+    optional_steps => {
 
         # which optional steps to run and when to run them
         # valid keys are: branches, dow, min_hours_since, min_hour, max_hour
         # find_typedefs => { branches => ['HEAD'], dow => [1,4],
-        #	 			       min_hours_since => 25 },
+        #                      min_hours_since => 25 },
         # build_docs => {min_hours_since => 24},
     },
 
     # locales to test
 
-    locales => [qw( C )],
+    locales => [qw( C ru_RU.UTF-8)],
 
     # port number actually used will be based on this param and the branch,
     # so we ensure they don't collide
@@ -252,17 +285,18 @@ my $branch;
     #
 );
 
+# settings used by run_branches.pl
 if ($branch eq 'global')
 {
 
-    $conf{branches_to_build} = 'ALL';
+	$conf{branches_to_build} = 'ALL';
 
-    # or 'HEAD_PLUS_LATEST' or 'HEAD_PLUS_LATEST2'
-    # or [qw( HEAD RELx_y_STABLE etc )]
+	# or 'HEAD_PLUS_LATEST' or 'HEAD_PLUS_LATEST2'
+	# or [qw( HEAD RELx_y_STABLE etc )]
 
-    # set this if you are running multiple animals and want them coordinated
+	# set this if you are running multiple animals and want them coordinated
 
-    # $conf{global_lock_dir} = '/path/to/lockdir';
+	# $conf{global_lock_dir} = '/path/to/lockdir';
 
 }
 
@@ -271,77 +305,78 @@ if ($branch eq 'global')
 if ($conf{using_msvc})
 {
 
-    # all this stuff is to support MSVC builds - it's literally what
-    # a VS Command Prompt sets for me.
-    # make sure it's what your sets for you. There can be subtle differences.
-    # Note: we need to set here whatever would be set in buildenv.bat, as
-    # we aren't going to write that file. This supercedes it. In
-    # particular, the PATH possibly needs to include the path to perl, bison,
-    # flex etc., as well as CVS if that's not in the path.
+	# all this stuff is to support MSVC builds - it's literally what
+	# a VS Command Prompt sets for me.
+	# make sure it's what your sets for you. There can be subtle differences.
+	# Note: we need to set here whatever would be set in buildenv.bat, as
+	# we aren't going to write that file. This supercedes it. In
+	# particular, the PATH possibly needs to include the path to perl, bison,
+	# flex etc., as well as CVS if that's not in the path.
 
-    my %extra_buildenv =(
+	my %extra_buildenv = (
 
-        VSINSTALLDIR => 'C:\Program Files\Microsoft Visual Studio 8',
-        VCINSTALLDIR => 'C:\Program Files\Microsoft Visual Studio 8\VC',
-        VS80COMNTOOLS =>
-          'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools',
-        FrameworkDir => 'C:\WINDOWS\Microsoft.NET\Framework',
-        FrameworkVersion => 'v2.0.50727',
-        FrameworkSDKDir =>'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0',
-        DevEnvDir => 'C:\Program Files\Microsoft Visual Studio 8\Common7\IDE',
+		VSINSTALLDIR => 'C:\Program Files\Microsoft Visual Studio 8',
+		VCINSTALLDIR => 'C:\Program Files\Microsoft Visual Studio 8\VC',
+		VS80COMNTOOLS =>
+		  'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools',
+		FrameworkDir     => 'C:\WINDOWS\Microsoft.NET\Framework',
+		FrameworkVersion => 'v2.0.50727',
+		FrameworkSDKDir =>
+		  'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0',
+		DevEnvDir => 'C:\Program Files\Microsoft Visual Studio 8\Common7\IDE',
 
-        PATH => join(';',
-            'C:\Program Files\Microsoft Visual Studio 8\Common7\IDE',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\BIN',
-            'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools',
-            'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools\bin',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\bin',
-            'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\bin',
-            'C:\WINDOWS\Microsoft.NET\Framework\v2.0.50727',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\VCPackages',
-            'C:\Perl\Bin',
-            'c:\prog\pgdepend\bin',
-            $ENV{PATH}),
-        INCLUDE => join(';',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\INCLUDE',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\INCLUDE',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\include',
-            'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\include',
-            $ENV{INCLUDE}),
+		PATH => join(';',
+			'C:\Program Files\Microsoft Visual Studio 8\Common7\IDE',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\BIN',
+			'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools',
+			'C:\Program Files\Microsoft Visual Studio 8\Common7\Tools\bin',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\bin',
+			'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\bin',
+			'C:\WINDOWS\Microsoft.NET\Framework\v2.0.50727',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\VCPackages',
+			'C:\Perl\Bin',
+			'c:\prog\pgdepend\bin',
+			$ENV{PATH}),
+		INCLUDE => join(';',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\INCLUDE',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\INCLUDE',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\include',
+			'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\include',
+			$ENV{INCLUDE}),
 
-        LIB => join(';',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\LIB',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\LIB'
-              .'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\lib',
-            'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\lib'
-              .$ENV{LIB}),
+		LIB => join(';',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\LIB',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\LIB'
+			  . 'C:\Program Files\Microsoft Visual Studio 8\VC\PlatformSDK\lib',
+			'C:\Program Files\Microsoft Visual Studio 8\SDK\v2.0\lib'
+			  . $ENV{LIB}),
 
-        LIBPATH => join(';',
-            'C:\WINDOWS\Microsoft.NET\Framework\v2.0.50727',
-            'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\LIB'),
-    );
+		LIBPATH => join(';',
+			'C:\WINDOWS\Microsoft.NET\Framework\v2.0.50727',
+			'C:\Program Files\Microsoft Visual Studio 8\VC\ATLMFC\LIB'),
+	);
 
-    %{$conf{build_env}} = (%{$conf{build_env}}, %extra_buildenv);
+	%{ $conf{build_env} } = (%{ $conf{build_env} }, %extra_buildenv);
 
-    # MSVC needs a somewhat different style of config opts (why??)
-    # What we write here will be literally (via Data::Dumper) put into
-    # the config.pl file for the MSVC build.
+	# MSVC needs a somewhat different style of config opts (why??)
+	# What we write here will be literally (via Data::Dumper) put into
+	# the config.pl file for the MSVC build.
 
-    $conf{config_opts} ={
-        asserts=>1,                     # --enable-cassert
-        integer_datetimes=>1,           # --enable-integer-datetimes
-        nls=>undef,                     # --enable-nls=<path>
-        tcl=>'c:\tcl',                  # --with-tcl=<path>
-        perl=>'c:\perl',                # --with-perl=<path>
-        python=>'c:\python25',          # --with-python=<path>
-        krb5=> undef,                   # --with-krb5=<path>
-        ldap=>0,                        # --with-ldap
-        openssl=> undef,                # --with-ssl=<path>
-        xml=> undef,                    # --with-libxml=<path>
-        xslt=> undef,                   # --with-libxslt=<path>,
-        iconv=> undef,                  # path to iconv library
-        zlib=> undef,                   # --with-zlib=<path>
-    };
+	$conf{config_opts} = {
+		asserts           => 1,                # --enable-cassert
+		integer_datetimes => 1,                # --enable-integer-datetimes
+		nls               => undef,            # --enable-nls=<path>
+		tcl               => 'c:\tcl',         # --with-tcl=<path>
+		perl              => 'c:\perl',        # --with-perl=<path>
+		python            => 'c:\python25',    # --with-python=<path>
+		krb5              => undef,            # --with-krb5=<path>
+		ldap              => 0,                # --with-ldap
+		openssl           => undef,            # --with-ssl=<path>
+		xml               => undef,            # --with-libxml=<path>
+		xslt              => undef,            # --with-libxslt=<path>,
+		iconv             => undef,            # path to iconv library
+		zlib              => undef,            # --with-zlib=<path>
+	};
 
 }
 
@@ -354,18 +389,18 @@ if ($conf{using_msvc})
 if ($branch eq 'HEAD')
 {
 
-    #	push(@{$conf{config_opts}},"--enable-depend");
+	#	push(@{$conf{config_opts}},"--enable-depend");
 
-    #   Note that config_opts is a hashref for MSVC, rather than
-    #   an arrayref like elsewhere. That means the right way to set
-    #   semething there is like this:
-    #
-    #   $conf{config_opts}->{openssl} = 'c:\path\to\openssl\installation';
+	#   Note that config_opts is a hashref for MSVC, rather than
+	#   an arrayref like elsewhere. That means the right way to set
+	#   semething there is like this:
+	#
+	#   $conf{config_opts}->{openssl} = 'c:\path\to\openssl\installation';
 }
 elsif ($branch =~ /^REL7_/)
 {
 
-    #    push(@{$conf{config_opts}},"--without-tk");
+	#    push(@{$conf{config_opts}},"--without-tk");
 }
 
 1;

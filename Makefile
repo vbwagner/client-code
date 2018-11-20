@@ -13,7 +13,7 @@ PERLFILES = run_build.pl run_web_txn.pl run_branches.pl \
 	PGBuild/SCM.pm PGBuild/Options.pm PGBuild/WebTxn.pm PGBuild/Utils.pm \
 	PGBuild/Modules/Skeleton.pm \
 	PGBuild/Modules/TestUpgrade.pm \
-	PGBuild/Modules/FileTextArrayFDW.pm \
+	PGBuild/Modules/FileTextArrayFDW.pm PGBuild/Modules/BlackholeFDW.pm \
 	PGBuild/Modules/TestDecoding.pm \
 	PGBuild/Modules/TestCollateLinuxUTF8.pm \
 	PGBuild/Modules/TestSepgsql.pm \
@@ -49,10 +49,13 @@ syncheck:
 	for f in $(ALLPERLFILES) ; do perl -cw $${f}; done;
 
 tidy:
-	perltidy -b -bl -nsfs -naws -l=80 -ole=unix $(ALLPERLFILES) 
+	perltidy $(ALLPERLFILES)
+
+critic:
+	perlcritic -3 --theme core $(ALLPERLFILES)
 
 clean:
 	find . "(" -name '*.bak' -o -name '*.orig' -o -name '*~' ")" -type f -exec rm -f {} \;
 
 show:
-	@echo ALLPERLFILES: $(ALLPERLFILES)
+	@echo $(ALLPERLFILES)
